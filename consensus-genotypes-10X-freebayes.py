@@ -10,8 +10,7 @@ vcf_header = '''##fileformat=VCFv4.1
 ##source=consensus-genotypes-10X-freebayes.py
 ##FORMAT=<ID=GT,Number=1,Type=String,Description="Genotype">
 ##FILTER=<ID=PASS,Description="All filters passed">
-#CHROM\tPOS\tID\tREF\tALT\tQUAL\tFILTER\tINFO\tFORMAT\t{sample}
-'''
+#CHROM\tPOS\tID\tREF\tALT\tQUAL\tFILTER\tINFO\tFORMAT\t{sample}'''
 
 def main():
 	parser = ArgumentParser(prog='consensus-genotypes-10X-freebayes.py', description=__doc__)
@@ -47,7 +46,7 @@ def main():
 	gt2string = { -1: './.', 0: '0/0', 1: '0/1', 2: '1/1' }
 	for variant_table in vcf_reader_freebayes:
 		chromosome = variant_table.chromosome
-		print('Processing chromosome', chromosome)
+		print('Processing chromosome', chromosome, file=sys.stderr)
 		variant_tables_10x = []
 		for m in variants_10x:
 			try:
@@ -93,9 +92,10 @@ def main():
 			if keep_variant:
 				print(chromosome, variant.position + 1, '.', variant.reference_allele, variant.alternative_allele, '.', '.', '.', 'GT', '\t'.join(gt_strings), sep='\t')
 				variants_to_keep += 1
+	print('Genotype concordance table (-1: genotype "./." or ".", -2: not in file at all)', file=sys.stderr)
 	keys = list(sorted(concordance_table.keys()))
 	for key in keys:
-		print(key, concordance_table[key])
+		print(key, concordance_table[key], file=sys.stderr)
 	print('Keeping {} of {} variants'.format(variants_to_keep, total_variants), file=sys.stderr)
 	
 
