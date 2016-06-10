@@ -19,7 +19,9 @@ chromosomes = ['chr'+str(x) for x in range(1,23)] #+ ['chrX']
 rule master:
 	input: 
 		expand('whatshap/10X/SH032.{chromosome}.vcf', chromosome=chromosomes),
-		expand('compare/pedmec10X-strandseq/{sample}/{chromosome}.txt', chromosome=chromosomes, sample=samples['SH032'])
+		'compare/pedmec10X-strandseq/SH032.tsv',
+		expand('stats/{source}/SH032.tsv', source=['10X-raw', '10X-filtered', 'whatshap-10X'])
+		#expand('compare/pedmec10X-strandseq/{sample}/{chromosome}.tsv', chromosome=chromosomes, sample=samples['SH032']),
 
 rule download_ebi_ftp:
 	output: 'ftp/{file}'
@@ -103,7 +105,37 @@ rule compare_phasing:
 	input:
 		pedmec10X=lambda wildcards: 'whatshap/10X/{family}.{chromosome}.vcf'.format(family=sample2fam[wildcards.sample],chromosome=wildcards.chromosome),
 		strandseq='input/strandseq/{sample}/{chromosome}.vcf'
-	output: 'compare/pedmec10X-strandseq/{sample}/{chromosome}.txt'
+	output: 'compare/pedmec10X-strandseq/{sample}/{chromosome}.tsv'
 	log: 'compare/pedmec10X-strandseq/{sample}/{chromosome}.log'
 	shell:
-		'~/scm/whatshap/bin/whatshap compare --names pedmec10X,strandseq {input.pedmec10X} {input.strandseq} > {output} 2> {log}'
+		'~/scm/whatshap/bin/whatshap compare --tsv-pairwise {output} --names pedmec10X,strandseq {input.pedmec10X} {input.strandseq} > {log} 2>&1'
+
+
+rule merge_tsvs:
+	input: lambda wildcards: ['compare/pedmec10X-strandseq/{}/{}.tsv'.format(sample,chromosome) for sample in samples[wildcards.family] for chromosome in chromosomes]
+	output: 'compare/pedmec10X-strandseq/{family}.tsv'
+	shell:
+		'(head -n1 {input[0]} && tail -q -n1 {input}) > {output}'
+
+
+rule stats_10X:
+	input: '10X/{sample}/{what}/{chromosome}.vcf.gz'
+	output: 'stats/10X-{what}/{sample}/{chromosome}.tsv'
+	log: 'stats/10X-{what}/{sample}/{chromosome}.log'
+	shell:
+		'~/scm/whatshap/bin/whatshap stats --tsv {output} {input} > {log} 2>&1'
+
+
+rule stats_whatshap:
+	input: lambda wildcards: 'whatshap/{}/{}.{}.vcf'.format(wildcards.what, sample2fam[wildcards.sample], wildcards.chromosome)
+	output: 'stats/whatshap-{what}/{sample}/{chromosome}.tsv'
+	log: 'stats/whatshap-{what}/{sample}/{chromosome}.log'
+	shell:
+		'~/scm/whatshap/bin/whatshap stats --tsv {output} --sample {wildcards.sample} {input} > {log} 2>&1'
+
+
+rule merge_stats_tsvs:
+	input: lambda wildcards: ['stats/{}/{}/{}.tsv'.format(wildcards.source,sample,chromosome) for sample in samples[wildcards.family] for chromosome in chromosomes]
+	output: 'stats/{source}/{family}.tsv'
+	shell:
+		'(head -n1 {input[0]} && tail -q -n1 {input}) > {output}'
