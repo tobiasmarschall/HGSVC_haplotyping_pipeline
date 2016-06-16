@@ -18,7 +18,8 @@ chromosomes = ['chr'+str(x) for x in range(1,23)] #+ ['chrX']
 
 rule master:
 	input: 
-		expand('whatshap/10X/SH032.{chromosome}.vcf', chromosome=chromosomes),
+		expand('whatshap/{source}/SH032.{chromosome}.vcf', chromosome=chromosomes, source=['10X','strandseq']),
+		expand('compare/multi/{sample}/{chromosome}.tsv', chromosome=chromosomes, sample=samples['SH032']),
 		'compare/pedmec10X-strandseq/SH032.tsv',
 		expand('stats/{source}/SH032.tsv', source=['10X-raw', '10X-filtered', 'whatshap-10X'])
 		#expand('compare/pedmec10X-strandseq/{sample}/{chromosome}.tsv', chromosome=chromosomes, sample=samples['SH032']),
@@ -84,22 +85,57 @@ rule extract_chromosome_10X:
 		'zcat {input.vcf} | awk \'($0 ~ /^#/) || ($1=="{wildcards.chromosome}")\' | uniq | gzip > {output.vcf}'
 
 
+rule project_strandseq:
+	input:
+		vcf_strandseq='input/strandseq/{sample}/{chromosome}.vcf',
+		vcf_consensus=lambda wildcards: 'consensus/freebayes_10X/{family}.{chromosome}.vcf'.format(family=sample2fam[wildcards.sample], chromosome=wildcards.chromosome)
+	output:
+		vcf='strandseq/{sample}/{chromosome}.vcf'
+	log: 'strandseq/{sample}/{chromosome}.log'
+	shell:
+		'~/scm/hgsvc/project-strandseq-to-consensus.py --max-pq 50 {input.vcf_consensus} {input.vcf_strandseq} > {output.vcf} 2> {log}'
+
 rule extract_ped:
 	input: 'ftp/sv_trio_families.ped'
 	output: 'ped/{family}.ped'
 	shell: 'awk \'$1 == "{wildcards.family}"\' {input} > {output}'
 
-rule whatshap:
+rule whatshap_10X:
 	input:
 		vcfs_10X=lambda wildcards: ['10X/{sample}/filtered/{chromosome}.vcf.gz'.format(sample=s, chromosome=wildcards.chromosome) for s in samples[wildcards.family]],
 		vcf_consensus='consensus/freebayes_10X/{family}.{chromosome}.vcf',
 		ped='ped/{family}.ped'
 	output:
-		vcf='whatshap/10X/{family}.{chromosome}.vcf'
+		vcf='whatshap/10X/{family}.{chromosome}.vcf',
+		recomb='whatshap/10X/{family}.{chromosome}.recomb',
 	log: 'whatshap/10X/{family}.{chromosome}.log'
 	shell:
-		'~/scm/whatshap/bin/whatshap phase --ped {input.ped} -o {output.vcf} {input.vcf_consensus} {input.vcfs_10X} > {log} 2>&1'
+		'~/scm/whatshap/bin/whatshap phase --ped {input.ped} --recombination-list {output.recomb} -o {output.vcf} {input.vcf_consensus} {input.vcfs_10X} > {log} 2>&1'
 
+rule whatshap_strandseq:
+	input:
+		vcfs_strandseq=lambda wildcards: ['strandseq/{sample}/{chromosome}.vcf'.format(sample=s, chromosome=wildcards.chromosome) for s in samples[wildcards.family]],
+		vcf_consensus='consensus/freebayes_10X/{family}.{chromosome}.vcf',
+		ped='ped/{family}.ped'
+	output:
+		vcf='whatshap/strandseq/{family}.{chromosome}.vcf',
+		recomb='whatshap/strandseq/{family}.{chromosome}.recomb',
+	log: 'whatshap/strandseq/{family}.{chromosome}.log'
+	shell:
+		'~/scm/whatshap/bin/whatshap phase --ped {input.ped} --recombination-list {output.recomb} -o {output.vcf} {input.vcf_consensus} {input.vcfs_strandseq} > {log} 2>&1'
+
+rule whatshap_strandseq_10X:
+	input:
+		vcfs_10X=lambda wildcards: ['10X/{sample}/filtered/{chromosome}.vcf.gz'.format(sample=s, chromosome=wildcards.chromosome) for s in samples[wildcards.family]],
+		vcfs_strandseq=lambda wildcards: ['strandseq/{sample}/{chromosome}.vcf'.format(sample=s, chromosome=wildcards.chromosome) for s in samples[wildcards.family]],
+		vcf_consensus='consensus/freebayes_10X/{family}.{chromosome}.vcf',
+		ped='ped/{family}.ped'
+	output:
+		vcf='whatshap/strandseq-10X/{family}.{chromosome}.vcf',
+		recomb='whatshap/strandseq-10X/{family}.{chromosome}.recomb',
+	log: 'whatshap/strandseq-10X/{family}.{chromosome}.log'
+	shell:
+		'~/scm/whatshap/bin/whatshap phase --ped {input.ped} --recombination-list {output.recomb} -o {output.vcf} {input.vcf_consensus} {input.vcfs_strandseq} {input.vcfs_10X} > {log} 2>&1'
 
 rule compare_phasing:
 	input:
@@ -110,6 +146,16 @@ rule compare_phasing:
 	shell:
 		'~/scm/whatshap/bin/whatshap compare --tsv-pairwise {output} --names pedmec10X,strandseq {input.pedmec10X} {input.strandseq} > {log} 2>&1'
 
+rule compare_phasing_multi:
+	input:
+		pedmec_strandseq_10X=lambda wildcards: 'whatshap/strandseq-10X/{family}.{chromosome}.vcf'.format(family=sample2fam[wildcards.sample],chromosome=wildcards.chromosome),
+		pedmec_10X=lambda wildcards: 'whatshap/10X/{family}.{chromosome}.vcf'.format(family=sample2fam[wildcards.sample],chromosome=wildcards.chromosome),
+		pedmec_strandseq=lambda wildcards: 'whatshap/strandseq/{family}.{chromosome}.vcf'.format(family=sample2fam[wildcards.sample],chromosome=wildcards.chromosome),
+		raw_strandseq='strandseq/{sample}/{chromosome}.vcf'
+	output: 'compare/multi/{sample}/{chromosome}.tsv'
+	log: 'compare/multi/{sample}/{chromosome}.log'
+	shell:
+		'~/scm/whatshap/bin/whatshap compare --tsv-pairwise {output} --names raw_ss,pedmec_10X,pedmec_ss,pedmec_ss_10X {input.raw_strandseq} {input.pedmec_10X} {input.pedmec_strandseq} {input.pedmec_strandseq_10X} > {log} 2>&1'
 
 rule merge_tsvs:
 	input: lambda wildcards: ['compare/pedmec10X-strandseq/{}/{}.tsv'.format(sample,chromosome) for sample in samples[wildcards.family] for chromosome in chromosomes]
