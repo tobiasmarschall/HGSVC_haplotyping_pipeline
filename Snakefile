@@ -1,4 +1,5 @@
-families = ['SH032', 'Y117', 'PR05']
+from itertools import chain
+families = ['SH032', 'PR05'] # 'Y117',
 fam2pop = {
 	'SH032':'CHS',
 	'Y117': 'YRI',
@@ -15,13 +16,15 @@ for fam, sample_list in samples.items():
 		sample2fam[sample] = fam
 ref = 'ref/GRCh38_full_analysis_set_plus_decoy_hla.fa'
 chromosomes = ['chr'+str(x) for x in range(1,23)] #+ ['chrX']
+#chromosomes = ['chr1']
 
 rule master:
 	input: 
-		expand('whatshap/{source}/SH032.{chromosome}.vcf', chromosome=chromosomes, source=['10X','strandseq']),
-		expand('compare/multi/{sample}/{chromosome}.tsv', chromosome=chromosomes, sample=samples['SH032']),
-		'compare/pedmec10X-strandseq/SH032.tsv',
-		expand('stats/{source}/SH032.tsv', source=['10X-raw', '10X-filtered', 'whatshap-10X'])
+		expand('whatshap/{source}/{family}.{chromosome}.vcf', family=families, chromosome=chromosomes, source=['10X','strandseq']),
+		expand('compare/multi3/{family}.tsv', chromosome=chromosomes, family=families),
+		expand('compare/multi5/{family}.tsv', chromosome=chromosomes, family=families),
+		expand('stats/{source}/{family}.tsv', family=families, source=['10X-raw', '10X-filtered', 'whatshap-10X', 'whatshap-strandseq', 'whatshap-strandseq-10X', 'strandseq']),
+		expand('release/{family}.wgs.whatshap.strandseq-10X.20160622.phased-genotypes.vcf.gz', family=families)
 		#expand('compare/pedmec10X-strandseq/{sample}/{chromosome}.tsv', chromosome=chromosomes, sample=samples['SH032']),
 
 rule download_ebi_ftp:
@@ -110,7 +113,7 @@ rule whatshap_10X:
 		recomb='whatshap/10X/{family}.{chromosome}.recomb',
 	log: 'whatshap/10X/{family}.{chromosome}.log'
 	shell:
-		'~/scm/whatshap/bin/whatshap phase --ped {input.ped} --recombination-list {output.recomb} -o {output.vcf} {input.vcf_consensus} {input.vcfs_10X} > {log} 2>&1'
+		'~/scm/whatshap.to-run/bin/whatshap phase --ped {input.ped} --tag PS --recombination-list {output.recomb} -o {output.vcf} {input.vcf_consensus} {input.vcfs_10X} > {log} 2>&1'
 
 rule whatshap_strandseq:
 	input:
@@ -122,7 +125,7 @@ rule whatshap_strandseq:
 		recomb='whatshap/strandseq/{family}.{chromosome}.recomb',
 	log: 'whatshap/strandseq/{family}.{chromosome}.log'
 	shell:
-		'~/scm/whatshap/bin/whatshap phase --ped {input.ped} --recombination-list {output.recomb} -o {output.vcf} {input.vcf_consensus} {input.vcfs_strandseq} > {log} 2>&1'
+		'~/scm/whatshap.to-run/bin/whatshap phase --ped {input.ped} --tag PS --recombination-list {output.recomb} -o {output.vcf} {input.vcf_consensus} {input.vcfs_strandseq} > {log} 2>&1'
 
 rule whatshap_strandseq_10X:
 	input:
@@ -135,7 +138,7 @@ rule whatshap_strandseq_10X:
 		recomb='whatshap/strandseq-10X/{family}.{chromosome}.recomb',
 	log: 'whatshap/strandseq-10X/{family}.{chromosome}.log'
 	shell:
-		'~/scm/whatshap/bin/whatshap phase --ped {input.ped} --recombination-list {output.recomb} -o {output.vcf} {input.vcf_consensus} {input.vcfs_strandseq} {input.vcfs_10X} > {log} 2>&1'
+		'~/scm/whatshap.to-run/bin/whatshap phase --ped {input.ped} --tag PS --recombination-list {output.recomb} -o {output.vcf} {input.vcf_consensus} {input.vcfs_strandseq} {input.vcfs_10X} > {log} 2>&1'
 
 rule compare_phasing:
 	input:
@@ -144,24 +147,43 @@ rule compare_phasing:
 	output: 'compare/pedmec10X-strandseq/{sample}/{chromosome}.tsv'
 	log: 'compare/pedmec10X-strandseq/{sample}/{chromosome}.log'
 	shell:
-		'~/scm/whatshap/bin/whatshap compare --tsv-pairwise {output} --names pedmec10X,strandseq {input.pedmec10X} {input.strandseq} > {log} 2>&1'
+		'~/scm/whatshap.to-run/bin/whatshap compare --tsv-pairwise {output} --names pedmec10X,strandseq {input.pedmec10X} {input.strandseq} > {log} 2>&1'
 
-rule compare_phasing_multi:
+rule compare_phasing_multi5:
 	input:
 		pedmec_strandseq_10X=lambda wildcards: 'whatshap/strandseq-10X/{family}.{chromosome}.vcf'.format(family=sample2fam[wildcards.sample],chromosome=wildcards.chromosome),
 		pedmec_10X=lambda wildcards: 'whatshap/10X/{family}.{chromosome}.vcf'.format(family=sample2fam[wildcards.sample],chromosome=wildcards.chromosome),
 		pedmec_strandseq=lambda wildcards: 'whatshap/strandseq/{family}.{chromosome}.vcf'.format(family=sample2fam[wildcards.sample],chromosome=wildcards.chromosome),
-		raw_strandseq='strandseq/{sample}/{chromosome}.vcf'
-	output: 'compare/multi/{sample}/{chromosome}.tsv'
-	log: 'compare/multi/{sample}/{chromosome}.log'
+		only_strandseq='strandseq/{sample}/{chromosome}.vcf',
+		only_10X='10X/{sample}/filtered/{chromosome}.vcf.gz'
+	output: 'compare/multi5/{sample}/{chromosome}.tsv'
+	log: 'compare/multi5/{sample}/{chromosome}.log'
 	shell:
-		'~/scm/whatshap/bin/whatshap compare --tsv-pairwise {output} --names raw_ss,pedmec_10X,pedmec_ss,pedmec_ss_10X {input.raw_strandseq} {input.pedmec_10X} {input.pedmec_strandseq} {input.pedmec_strandseq_10X} > {log} 2>&1'
+		'~/scm/whatshap.to-run/bin/whatshap compare --tsv-pairwise {output} --names only_10X,only_ss,pedmec_10X,pedmec_ss,pedmec_ss_10X {input.only_10X} {input.only_strandseq} {input.pedmec_10X} {input.pedmec_strandseq} {input.pedmec_strandseq_10X} > {log} 2>&1'
+
+rule compare_phasing_multi3:
+	input:
+		pedmec_strandseq_10X=lambda wildcards: 'whatshap/strandseq-10X/{family}.{chromosome}.vcf'.format(family=sample2fam[wildcards.sample],chromosome=wildcards.chromosome),
+		pedmec_10X=lambda wildcards: 'whatshap/10X/{family}.{chromosome}.vcf'.format(family=sample2fam[wildcards.sample],chromosome=wildcards.chromosome),
+		pedmec_strandseq=lambda wildcards: 'whatshap/strandseq/{family}.{chromosome}.vcf'.format(family=sample2fam[wildcards.sample],chromosome=wildcards.chromosome),
+	output: 'compare/multi3/{sample}/{chromosome}.tsv'
+	log: 'compare/multi3/{sample}/{chromosome}.log'
+	shell:
+		'~/scm/whatshap.to-run/bin/whatshap compare --tsv-pairwise {output} --sample {wildcards.sample} --names pedmec_10X,pedmec_ss,pedmec_ss_10X {input.pedmec_10X} {input.pedmec_strandseq} {input.pedmec_strandseq_10X} > {log} 2>&1'
 
 rule merge_tsvs:
-	input: lambda wildcards: ['compare/pedmec10X-strandseq/{}/{}.tsv'.format(sample,chromosome) for sample in samples[wildcards.family] for chromosome in chromosomes]
-	output: 'compare/pedmec10X-strandseq/{family}.tsv'
+	input: lambda wildcards: ['compare/{}/{}/{}.tsv'.format(wildcards.what, sample,chromosome) for sample in samples[wildcards.family] for chromosome in chromosomes]
+	output: 'compare/{what}/{family}.tsv'
 	shell:
-		'(head -n1 {input[0]} && tail -q -n1 {input}) > {output}'
+		'(head -n1 {input[0]} && grep -hv "^#" {input}) > {output}'
+
+
+rule stats_strandseq:
+	input: 'strandseq/{sample}/{chromosome}.vcf'
+	output: 'stats/strandseq/{sample}/{chromosome}.tsv'
+	log: 'stats/strandseq/{sample}/{chromosome}.log'
+	shell:
+		'~/scm/whatshap.to-run/bin/whatshap stats --tsv {output} {input} > {log} 2>&1'
 
 
 rule stats_10X:
@@ -169,7 +191,7 @@ rule stats_10X:
 	output: 'stats/10X-{what}/{sample}/{chromosome}.tsv'
 	log: 'stats/10X-{what}/{sample}/{chromosome}.log'
 	shell:
-		'~/scm/whatshap/bin/whatshap stats --tsv {output} {input} > {log} 2>&1'
+		'~/scm/whatshap.to-run/bin/whatshap stats --tsv {output} {input} > {log} 2>&1'
 
 
 rule stats_whatshap:
@@ -177,7 +199,7 @@ rule stats_whatshap:
 	output: 'stats/whatshap-{what}/{sample}/{chromosome}.tsv'
 	log: 'stats/whatshap-{what}/{sample}/{chromosome}.log'
 	shell:
-		'~/scm/whatshap/bin/whatshap stats --tsv {output} --sample {wildcards.sample} {input} > {log} 2>&1'
+		'~/scm/whatshap.to-run/bin/whatshap stats --tsv {output} --sample {wildcards.sample} {input} > {log} 2>&1'
 
 
 rule merge_stats_tsvs:
@@ -185,3 +207,31 @@ rule merge_stats_tsvs:
 	output: 'stats/{source}/{family}.tsv'
 	shell:
 		'(head -n1 {input[0]} && tail -q -n1 {input}) > {output}'
+
+
+rule sequence_dict:
+	input: 'ref/{file}.fa'
+	output: 'ref/{file}.fa.dict'
+	log: 'ref/{file}.fa.dict.log'
+	shell:
+		'picard CreateSequenceDictionary R={input} O={output} > {log} 2>&1'
+
+
+rule filter_whatshap:
+	input: 'whatshap/{what}/{family}.{chromosome}.vcf'
+	output: 'whatshap/{what}/only-phased-sites/{family}.{chromosome}.vcf'
+	shell:
+		'awk \'($0 ~ /^#/) || ($9 ~ /PS/)\' {input} > {output}'
+
+
+rule merge_vcfs_for_release:
+	input:
+		vcf= lambda wildcards: ['whatshap/{}/only-phased-sites/{}.{}.vcf'.format(wildcards.what,wildcards.family, chromosome) for chromosome in chromosomes],
+		seqdict='{}.dict'.format(ref)
+	output:
+		vcf='release/{family}.wgs.whatshap.{what}.{date}.phased-genotypes.vcf.gz',
+		tbi='release/{family}.wgs.whatshap.{what}.{date}.phased-genotypes.vcf.gz.tbi'
+	log: 'release/{family}.wgs.whatshap.{what}.{date}.phased-genotypes.vcf.log'
+	run:
+		allinputs = ' '.join('I={}'.format(f) for f in input.vcf)
+		shell('picard SortVcf {allinputs} SD={input.seqdict} O={output.vcf} > {log} 2>&1')
