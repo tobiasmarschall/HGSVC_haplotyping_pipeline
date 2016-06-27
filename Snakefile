@@ -1,5 +1,5 @@
 from itertools import chain
-families = ['SH032', 'PR05'] # 'Y117',
+families = ['SH032', 'PR05'] # 'Y117'
 fam2pop = {
 	'SH032':'CHS',
 	'Y117': 'YRI',
@@ -24,8 +24,11 @@ rule master:
 		expand('compare/multi3/{family}.tsv', chromosome=chromosomes, family=families),
 		expand('compare/multi5/{family}.tsv', chromosome=chromosomes, family=families),
 		expand('stats/{source}/{family}.tsv', family=families, source=['10X-raw', '10X-filtered', 'whatshap-10X', 'whatshap-strandseq', 'whatshap-strandseq-10X', 'strandseq']),
-		expand('release/{family}.wgs.whatshap.strandseq-10X.20160622.phased-genotypes.vcf.gz', family=families)
+		expand('release/{family}.wgs.whatshap.strandseq-10X.20160622.phased-genotypes.vcf.gz', family=families),
 		#expand('compare/pedmec10X-strandseq/{sample}/{chromosome}.tsv', chromosome=chromosomes, sample=samples['SH032']),
+		expand('consensus/freebayes_10X/{family}.{chromosome}.vcf', chromosome=chromosomes, family=['Y117']),
+		expand('tagged-bam/illumina/{sample}.tagged-20160622.bam.bai', sample=chain(*(samples[f] for f in families)))
+
 
 rule download_ebi_ftp:
 	output: 'ftp/{file}'
@@ -235,3 +238,34 @@ rule merge_vcfs_for_release:
 	run:
 		allinputs = ' '.join('I={}'.format(f) for f in input.vcf)
 		shell('picard SortVcf {allinputs} SD={input.seqdict} O={output.vcf} > {log} 2>&1')
+
+
+rule illumina_cram_to_bam:
+	input:
+		cram= lambda wildcards: 'ftp/data/{pop}/{sample}/high_cov_alignment/{sample}.alt_bwamem_GRCh38DH.20150715.{pop}.high_coverage.cram'.format(sample=wildcards.sample, pop=fam2pop[sample2fam[wildcards.sample]])
+	output:
+		bam='illumina/{sample}.bam'
+	log: 'illumina/{sample}.bam.log'
+	shell:
+		'samtools view -h {input.cram} | samtools view -Sb - > {output.bam} 2> {log}'
+
+
+rule index_bam:
+	input: 
+		bam='{file}.bam'
+	output:
+		bai='{file}.bam.bai'
+	shell:
+		'samtools index {input.bam}'
+
+
+rule haplotag_illumina:
+	input:
+		bam='illumina/{sample}.bam',
+		bai='illumina/{sample}.bam.bai',
+		vcf=lambda wildcards:'release/{family}.wgs.whatshap.strandseq-10X.{date}.phased-genotypes.vcf.gz'.format(family=sample2fam[wildcards.sample], date=wildcards.date)
+	output:
+		bam='tagged-bam/illumina/{sample}.tagged-{date}.bam'
+	log: 'tagged-bam/illumina/{sample}.tagged-{date}.bam.log'
+	shell:
+		'~/scm/whatshap.to-run/bin/whatshap haplotag {input.vcf} {input.bam} > {output.bam} 2> {log}'
