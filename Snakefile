@@ -2,7 +2,7 @@ import re
 from itertools import chain
 from collections import defaultdict, namedtuple
 import os
-families = ['SH032', 'PR05', 'Y117']
+families = ['SH032'] # ['SH032', 'PR05', 'Y117']
 fam2pop = {
 	'SH032':'CHS',
 	'Y117': 'YRI',
@@ -18,19 +18,27 @@ for fam, sample_list in samples.items():
 	for sample in sample_list:
 		sample2fam[sample] = fam
 ref = 'ref/GRCh38_full_analysis_set_plus_decoy_hla.fa'
-chromosomes = ['chr'+str(x) for x in range(1,23)] #+ ['chrX']
-#chromosomes = ['chr1','chr22']
+#chromosomes = ['chr'+str(x) for x in range(1,23)] #+ ['chrX']
+chromosomes = ['chr1']
+
+pacbio_blasr_files = {
+	(sample, chromosome):path for sample, chromosome, path, size, md5 in (line.split('\t') for line in open('pacbio-blasr-files.tsv')) if path.endswith('.bam')
+}
 
 genotype_sources = ['illumina', 'consensus']
-phaseinputs = ['moleculo','10X','strandseq','10X_strandseq']
-phasings = ['raw/10X', 'raw/strandseq'] + ['whatshap/{}-{}-{}'.format(g,p,m) for g in genotype_sources for p in phaseinputs for m in ['single', 'trio']]
+phaseinputs = ['moleculo','10X','strandseq','10X_strandseq','pacbioblasr', 'pacbioblasr_hic', 'hic','pacbioblasr_10X','pacbioblasr_strandseq','10X_hic','pacbioblasr_10X_strandseq']
+phasings = ['raw/10X', 'raw/strandseq'] + ['whatshap/{}-{}-{}'.format(g,p,m) for g in genotype_sources for p in phaseinputs for m in ['single','trio']]
+selected_phasings = ['consensus/strandseq/single', 'consensus/10X_hic/single', 'consensus/pacbioblasr_strandseq/single', 'consensus/10X_strandseq/trio', 'consensus/pacbioblasr_10X_strandseq/trio', 'illumina/10X_strandseq/trio']
 
 rule master:
 	input:
-		expand('whatshap/{genotypes}/{phaseinput}/{mode}/{family}.{chromosome}.vcf', genotypes=genotype_sources, phaseinput=phaseinputs, mode=['single','trio'], family=families, chromosome=chromosomes),
+		#expand('whatshap/{genotypes}/{phaseinput}/{mode}/{family}.{chromosome}.vcf', genotypes=genotype_sources, phaseinput=phaseinputs, mode=['single','trio'], family=families, chromosome=chromosomes),
 		expand('stats/{source}/{family}.tsv', source=phasings, family=families),
-		expand('comparison/all-inputs-{genotypes}-{mode}.{family}.tsv', genotypes=genotype_sources, mode=['single','trio'], family=families)
-		
+		expand('comparison/selected.{family}.tsv', family=families),
+		expand('whatshap-gt-test/{genotypes}/pacbioblasr/{regularizer}/{family}.{chromosome}.vcf', genotypes=genotype_sources, regularizer=['0', '0.001', '0.01', '0.1', '1'], family=families, chromosome=chromosomes)
+		#expand('comparison/all-inputs-{genotypes}-{mode}.{family}.tsv', genotypes=genotype_sources, mode=['single','trio'], family=families)
+		#expand('pacbio/{sample}.{chromosome}.bam', sample=chain(*(samples[f] for f in families)), chromosome=chromosomes)
+
 		#expand('whatshap/{genotypes}/{phaseinput}/single/{family}.{chromosome}.vcf', genotypes=['illumina', 'consensus'], phaseinput=['moleculo','10X','strandseq','10X_strandseq'], family=families, chromosome=['chr22'])
 		#expand('moleculo/chrwise/{sample}.{chromosome}.bam', sample=chain(*(samples[f] for f in families)), chromosome=chromosomes)
 		#expand('freebayes/moleculo/filtered/{family}.{chromosome}.vcf', family=families, chromosome=chromosomes)
@@ -54,15 +62,16 @@ rule master:
 		#expand('whatshap/pacbio/PR05.{chromosome}.vcf', chromosome=chromosomes)
 
 def translate_ebi_filename(f):
-	f = re.sub('HG00732.PUR.(.*).BLASR.20160525.PacBio.10x-phased.(.*)', 'HG007732.PUR.\\1.BLASR.20160525.PacBio.10x-phased.\\2', f)
-	f = re.sub('HG00731.PUR.(.*).BLASR.20160525.PacBio.10x-phased.(.*)', 'HG00731.YRI.\\1.BLASR.20160525.PacBio.10x-phased.\\2', f)
-	f = re.sub('HG00731.YRI.chr([56789]).BLASR.20160525.PacBio.10x-phased.(.*)', 'HG00731.chr\\1.\\2', f)
-	f = re.sub('HG00733.PUR.(.*).BLASR.20160525.PacBio.10x-phased.(.*)', 'HG00733.\\1.\\2', f)
+	f = re.sub('20160525.HG00513.PacBio.BLASR', '20160815.HG00513.PacBio.BLASR', f)
+	f = re.sub('20160525.NA19238.PacBio.BLASR', '20160608.NA19238.PacBio.BLASR', f)
+	#f = re.sub('HG00731.YRI.chr([56789]).BLASR.20160525.PacBio.10x-phased.(.*)', 'HG00731.chr\\1.\\2', f)
+	#f = re.sub('HG00733.PUR.(.*).BLASR.20160525.PacBio.10x-phased.(.*)', 'HG00733.\\1.\\2', f)
 	return f
 
 rule download_ebi_ftp:
-	output: 'ftp/{file}'
+	output: temp('ftp/{file}')
 	log: 'ftp/{file}.wgetlog'
+	resources: download=1
 	run: 
 		f = translate_ebi_filename('ftp://ftp.1000genomes.ebi.ac.uk/vol1/ftp/data_collections/hgsv_sv_discovery/{}'.format(wildcards.file))
 		shell('wget --output-file={log} -O {output} {f}')
@@ -92,6 +101,20 @@ rule moleculo_extract_chromosome:
 		bam='moleculo/chrwise/{sample}.{chromosome}.bam'
 	log: 'moleculo/chrwise/{sample}.{chromosome}.bam.log'
 	shell: '(samtools view -h {input.bam} {wildcards.chromosome} | samtools view -Sb - > {output.bam}) 2>{log}'
+
+
+def get_hic_bam(wildcards):
+	sample = wildcards.sample.replace('NA','GM')
+	return 'ftp/working/20160822_HiC_bam_files/{}_Hi-C_biorep1_merged_filtered.bam'.format(sample)
+
+rule hic_readgroup:
+	input: 
+		bam=get_hic_bam
+	output:
+		bam='hic/bam/{sample}.bam',
+		bai='hic/bam/{sample}.bai'
+	log: 'hic/bam/{sample}.log'
+	shell: 'picard AddOrReplaceReadGroups CREATE_INDEX=true CREATE_MD5_FILE=true ID={wildcards.sample} PL=hic PU=unknown LB=unknown SM={wildcards.sample} I={input.bam} O={output.bam} > {log} 2>&1'
 
 ruleorder: download_ebi_ftp > index_bam
 
@@ -208,7 +231,6 @@ rule extract_ped:
 	output: 'ped/{family}.ped'
 	shell: 'awk \'$1 == "{wildcards.family}"\' {input} > {output}'
 
-
 def get_genotype_vcf(wildcards):
 	if wildcards.genotypes == 'illumina':
 		return 'freebayes/illumina/filtered/{family}.{chromosome}.vcf'.format(**wildcards)
@@ -227,6 +249,10 @@ def get_phase_input(wildcards):
 			result.extend(['10X/{sample}/filtered/{chromosome}.vcf.gz'.format(sample=s, chromosome=wildcards.chromosome) for s in samples[wildcards.family]])
 		elif p == 'strandseq':
 			result.extend(['strandseq/projected/{sample}/{chromosome}.vcf'.format(sample=s, chromosome=wildcards.chromosome) for s in samples[wildcards.family]])
+		elif p == 'pacbioblasr':
+			result.extend(['pacbio/{sample}.{chromosome}.bam'.format(sample=s, chromosome=wildcards.chromosome) for s in samples[wildcards.family]])
+		elif p == 'hic':
+			result.extend(['hic/bam/{sample}.bam'.format(sample=s) for s in samples[wildcards.family]])
 		else:
 			assert False
 	return result
@@ -258,6 +284,19 @@ rule whatshap_trio:
 		readlist='whatshap/{genotypes}/{phaseinput}/single/{family}.{chromosome}.used-reads.tsv'
 	log: 'whatshap/{genotypes}/{phaseinput}/trio/{family}.{chromosome}.vcf.log'
 	shell: '~/scm/whatshap.to-run/bin/whatshap phase --ped {input.ped} --indels --distrust-genotypes --output-read-list {output.readlist} --changed-genotype-list {output.corrected_gts} --reference {input.ref} --recombination-list {output.recomb} -o {output.vcf} {input.vcf} {input.phaseinput} > {log} 2>&1'
+
+
+rule whatshap_genotypes:
+	input:
+		vcf=get_genotype_vcf,
+		phaseinput=get_phase_input,
+		ref=ref
+	output:
+		vcf='whatshap-gt-test/{genotypes}/{phaseinput}/{regularizer}/{family}.{chromosome}.vcf',
+		corrected_gts='whatshap-gt-test/{genotypes}/{phaseinput}/{regularizer}/{family}.{chromosome}.genotype-changes.tsv',
+		readlist='whatshap-gt-test/{genotypes}/{phaseinput}/{regularizer}/{family}.{chromosome}.used-reads.tsv'
+	log: 'whatshap-gt-test/{genotypes}/{phaseinput}/{regularizer}/{family}.{chromosome}.log'
+	shell: '~/scm/whatshap.to-run/bin/whatshap phase --indels --distrust-genotypes --gl-regularizer {wildcards.regularizer} --include-homozygous --output-read-list {output.readlist} --changed-genotype-list {output.corrected_gts} --reference {input.ref} -o {output.vcf} {input.vcf} {input.phaseinput} > {log} 2>&1'
 
 
 #rule whatshap_10X:
@@ -337,9 +376,20 @@ rule compare_phasing:
 		shell('~/scm/whatshap.to-run/bin/whatshap compare --sample {wildcards.sample} --tsv-pairwise {output.tsv} --names {names} {input.vcfs} > {log} 2>&1')
 
 
+rule compare_selected_phasing:
+	input: 
+		vcfs= lambda wildcards: ['whatshap/{}/{}.{}.vcf'.format(s,sample2fam[wildcards.sample],wildcards.chromosome) for s in selected_phasings]
+	output: 
+		tsv='comparison/selected/{sample}.{chromosome}.tsv'
+	log: 'comparison/selected/{sample}.{chromosome}.log'
+	run:
+		names = ','.join(selected_phasings)
+		shell('~/scm/whatshap.to-run/bin/whatshap compare --sample {wildcards.sample} --tsv-pairwise {output.tsv} --names {names} {input.vcfs} > {log} 2>&1')
+
+
 rule merge_tsvs:
-	input: lambda wildcards: ['comparison/all-inputs-{}-{}/{}.{}.tsv'.format(wildcards.genotypes,wildcards.mode,sample,chromosome) for sample in samples[wildcards.family] for chromosome in chromosomes]
-	output: 'comparison/all-inputs-{genotypes}-{mode}.{family}.tsv'
+	input: lambda wildcards: ['comparison/{}/{}.{}.tsv'.format(wildcards.what,sample,chromosome) for sample in samples[wildcards.family] for chromosome in chromosomes]
+	output: 'comparison/{what}.{family}.tsv'
 	shell:
 		'(head -n1 {input[0]} && grep -hv "^#" {input}) > {output}'
 
@@ -472,31 +522,31 @@ rule haplotag_illumina:
 		'~/scm/whatshap.to-run/bin/whatshap haplotag {input.vcf} {input.bam} > {output.bam} 2> {log}'
 
 
-ruleorder: pacbio_reheader_sourcemanual > pacbio_reheader
-ruleorder: pacbio_correct_header_sourcemanual > pacbio_correct_header
+#ruleorder: pacbio_reheader_sourcemanual > pacbio_reheader
+#ruleorder: pacbio_correct_header_sourcemanual > pacbio_correct_header
 
 
-rule pacbio_correct_header_sourcemanual:
-	input: 'pacbio-blasr-missing/links/{sample}.{chromosome}.bam'
-	output: 'pacbio/{sample}.{chromosome}.header'
-	shell:
-		'samtools view -H {input} | sed -r \'/^@RG/ s|SM:[a-z0-9]+|SM:{wildcards.sample}|g\' > {output}'
+#rule pacbio_correct_header_sourcemanual:
+	#input: 'pacbio-blasr-missing/links/{sample}.{chromosome}.bam'
+	#output: 'pacbio/{sample}.{chromosome}.header'
+	#shell:
+		#'samtools view -H {input} | sed -r \'/^@RG/ s|SM:[a-z0-9]+|SM:{wildcards.sample}|g\' > {output}'
 
 
-rule pacbio_reheader_sourcemanual:
-	input:
-		header='pacbio/{sample}.{chromosome}.header',
-		bam='pacbio-blasr-missing/links/{sample}.{chromosome}.bam'
-	output:
-		bam='pacbio/{sample}.{chromosome}.bam',
-		bai='pacbio/{sample}.{chromosome}.bai',
-	log: 'pacbio/{sample}.{chromosome}.bam.log'
-	shell:
-		'picard ReplaceSamHeader CREATE_INDEX=true CREATE_MD5_FILE=true I={input.bam} O={output.bam} HEADER={input.header} > {log} 2>&1'
+#rule pacbio_reheader_sourcemanual:
+	#input:
+		#header='pacbio/{sample}.{chromosome}.header',
+		#bam='pacbio-blasr-missing/links/{sample}.{chromosome}.bam'
+	#output:
+		#bam='pacbio/{sample}.{chromosome}.bam',
+		#bai='pacbio/{sample}.{chromosome}.bai',
+	#log: 'pacbio/{sample}.{chromosome}.bam.log'
+	#shell:
+		#'picard ReplaceSamHeader CREATE_INDEX=true CREATE_MD5_FILE=true I={input.bam} O={output.bam} HEADER={input.header} > {log} 2>&1'
 
 
 rule pacbio_correct_header:
-	input: lambda wildcards: 'ftp/working/20160623_chaisson_pacbio_aligns/20160525.{sample}.PacBio.BLASR/{sample}.{pop}.{chromosome}.BLASR.20160525.PacBio.10x-phased.bam'.format(sample=wildcards.sample, chromosome=wildcards.chromosome, pop=fam2pop[sample2fam[wildcards.sample]])
+	input: lambda wildcards: 'ftp/working/20160623_chaisson_pacbio_aligns/{}'.format(pacbio_blasr_files[(wildcards.sample, wildcards.chromosome)])
 	output: 'pacbio/{sample}.{chromosome}.header'
 	shell:
 		'samtools view -H {input} | sed -r \'/^@RG/ s|SM:[a-z0-9]+|SM:{wildcards.sample}|g\' > {output}'
@@ -505,7 +555,7 @@ rule pacbio_correct_header:
 rule pacbio_reheader:
 	input:
 		header='pacbio/{sample}.{chromosome}.header',
-		bam=lambda wildcards: 'ftp/working/20160623_chaisson_pacbio_aligns/20160525.{sample}.PacBio.BLASR/{sample}.{pop}.{chromosome}.BLASR.20160525.PacBio.10x-phased.bam'.format(sample=wildcards.sample, chromosome=wildcards.chromosome, pop=fam2pop[sample2fam[wildcards.sample]])
+		bam=lambda wildcards: 'ftp/working/20160623_chaisson_pacbio_aligns/{}'.format(pacbio_blasr_files[(wildcards.sample, wildcards.chromosome)])
 	output:
 		bam='pacbio/{sample}.{chromosome}.bam',
 		bai='pacbio/{sample}.{chromosome}.bai',

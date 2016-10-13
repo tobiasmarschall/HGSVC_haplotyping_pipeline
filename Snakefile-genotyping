@@ -1,0 +1,113 @@
+import re
+from itertools import chain
+from collections import defaultdict, namedtuple
+import os
+families = ['SH032'] # ['SH032', 'PR05', 'Y117']
+fam2pop = {
+	'SH032':'CHS',
+	'Y117': 'YRI',
+	'PR05':'PUR'
+}
+samples = {
+	'SH032': ['HG00512', 'HG00513', 'HG00514'],
+	'Y117': ['NA19239', 'NA19238', 'NA19240'],
+	'PR05': ['HG00731', 'HG00732', 'HG00733']
+}
+sample2fam = {}
+for fam, sample_list in samples.items():
+	for sample in sample_list:
+		sample2fam[sample] = fam
+ref = 'ref/GRCh38_full_analysis_set_plus_decoy_hla.fa'
+#chromosomes = ['chr'+str(x) for x in range(1,23)] #+ ['chrX']
+chromosomes = ['chr22']
+
+genotype_sources = ['illumina', 'consensus']
+phaseinputs = ['moleculo','10X','strandseq','10X_strandseq','pacbioblasr', 'pacbioblasr_hic', 'hic','pacbioblasr_10X','pacbioblasr_strandseq','10X_hic','pacbioblasr_10X_strandseq']
+phasings = ['raw/10X', 'raw/strandseq'] + ['whatshap/{}-{}-{}'.format(g,p,m) for g in genotype_sources for p in phaseinputs for m in ['single','trio']]
+selected_phasings = ['consensus/strandseq/single', 'consensus/10X_hic/single', 'consensus/pacbioblasr_strandseq/single', 'consensus/10X_strandseq/trio', 'consensus/pacbioblasr_10X_strandseq/trio', 'illumina/10X_strandseq/trio']
+
+rule master:
+	input:
+		expand('pacbio-gts/{sites}/{family}.{chromosome}.vcf.gz', sites=['chaisson','consensus','pileup'], family=['Y117','SH032'], chromosome=chromosomes),
+		expand('candidate-snps/sample-wise/minabs{minabs}-minrel{minrel}/{sample}.{chromosome}.vcf.gz.tbi', minabs=[2,3,4], minrel=[0.15,0.2], sample=samples['Y117'], chromosome=chromosomes)
+		#expand('candidate-snps/sample-wise/minabs{minabs}-minrel{minrel}/{sample}.{chromosome}.vcf', minabs=[2,3,4,5,6,7,8], minrel=[0.2,0.3], sample=samples['Y117'], chromosome=chromosomes)
+
+def translate_ebi_filename(f):
+	#f = re.sub('20160525.HG00513.PacBio.BLASR', '20160815.HG00513.PacBio.BLASR', f)
+	#f = re.sub('20160525.NA19238.PacBio.BLASR', '20160608.NA19238.PacBio.BLASR', f)
+	#f = re.sub('HG00731.YRI.chr([56789]).BLASR.20160525.PacBio.10x-phased.(.*)', 'HG00731.chr\\1.\\2', f)
+	#f = re.sub('HG00733.PUR.(.*).BLASR.20160525.PacBio.10x-phased.(.*)', 'HG00733.\\1.\\2', f)
+	return f
+
+rule download_ebi_ftp:
+	output: 'ftp/{file}'
+	log: 'ftp/{file}.wgetlog'
+	resources: download=1
+	run: 
+		f = translate_ebi_filename('ftp://ftp.1000genomes.ebi.ac.uk/vol1/ftp/data_collections/hgsv_sv_discovery/{}'.format(wildcards.file))
+		shell('wget --output-file={log} -O {output} {f}')
+	#shell: 'touch {output}'
+
+rule prepare_chaisson_vcf:
+	input: 
+		vcf=lambda wildcards: 'ftp/working/20160915_PacBio_SNV/{}.PacBioSNV.vcf.gz'.format(samples[wildcards.family][2])
+	output:
+		vcf='sites/chaisson/{family}.{chromsome}.vcf'
+	run:
+		sample_names = '\t'.join(samples[wildcards.family])
+		shell('echo -n \'##fileformat=VCFv4.1\n#CHROM\tPOS\tID\tREF\tALT\tQUAL\tFILTER\tINFO\tFORMAT\t{sample_names}\n\' > {output.vcf}')
+		shell('zcat {input.vcf} | awk \'BEGIN {{OFS="\\t"}} $1=="{wildcards.chromsome}" {{$3=".";$8=".";$9="GT";$10=".";$11=".";$12="."; print }}\' >> {output.vcf}')
+
+
+rule prepare_consensus_vcf:
+	input: 
+		vcf='consensus/freebayes_10X/{family}.{chromsome}.vcf'
+	output:
+		vcf='sites/consensus/{family}.{chromsome}.vcf'
+	shell: 'awk \'BEGIN {{OFS="\\t"}} $0 ~ /^#/ {{print}} $0 !~ /^#/ {{$10=".";$11=".";$12="."; print}}\' {input.vcf} > {output.vcf}'
+
+
+rule whatshap_type:
+	input: 
+		vcf='sites/{sites}/{family}.{chromosome}.vcf',
+		bams=lambda wildcards: ['pacbio/{sample}.{chromosome}.bam'.format(sample=s, chromosome=wildcards.chromosome) for s in samples[wildcards.family]],
+		ref=ref
+	output:
+		vcf='pacbio-gts/{sites}/{family}.{chromosome}.vcf.gz'
+	log: 'pacbio-gts/{sites}/{family}.{chromosome}.log'
+	shell: '~/scm/whatshap.to-run/bin/whatshap phase --indels --full-genotyping --reference {input.ref} -o {output.vcf} {input.vcf} {input.bams} > {log} 2>&1'
+
+
+rule snp_candidates_samplewise:
+	input: 
+		bam='pacbio/{sample}.{chromosome}.bam',
+		ref=ref
+	output:
+		vcf='candidate-snps/sample-wise/minabs{minabs}-minrel{minrel}/{sample}.{chromosome}.vcf.gz'
+	log: 'candidate-snps/sample-wise/minabs{minabs}-minrel{minrel}/{sample}.{chromosome}.log'
+	shell: '(time samtools mpileup -q 20 -Q 5 {input.bam} | ~/scm/hgsvc/simple-snp-caller.py --minabs {wildcards.minabs} --minrel {wildcards.minrel} --sample {wildcards.sample} {input.ref} | bgzip > {output.vcf}) 2> {log}'
+
+rule tabix:
+	input:
+		vcf='{file}.vcf.gz'
+	output:
+		tbi='{file}.vcf.gz.tbi'
+	shell: 'tabix {input.vcf}'
+
+rule family_merge:
+	input:
+		vcf=lambda wildcards: ['candidate-snps/sample-wise/minabs{minabs}-minrel{minrel}/{sample}.{chromosome}.vcf.gz'.format(sample=s, chromosome=wildcards.chromosome, minabs=wildcards.minabs, minrel=wildcards.minrel) for s in samples[wildcards.family]],
+		tbi=lambda wildcards: ['candidate-snps/sample-wise/minabs{minabs}-minrel{minrel}/{sample}.{chromosome}.vcf.gz.tbi'.format(sample=s, chromosome=wildcards.chromosome, minabs=wildcards.minabs, minrel=wildcards.minrel) for s in samples[wildcards.family]],
+	output:
+		vcf='candidate-snps/family-wise/minabs{minabs}-minrel{minrel}/{family}.{chromosome}.vcf.gz'
+	log: 'candidate-snps/family-wise/minabs{minabs}-minrel{minrel}/{family}.{chromosome}.log'
+	shell:
+		'(bcftools merge {input.vcf} | bcftools filter -e \'(N_ALT>1) || (REF=="N") || (ALT=="N")\' - | bgzip > {output.vcf}) 2> {log}'
+
+rule copy_pileup_snps:
+	input:
+		vcf='candidate-snps/family-wise/minabs2-minrel0.15/{family}.{chromosome}.vcf.gz'
+	output: 
+		vcf='sites/pileup/{family}.{chromosome}.vcf'
+	shell:
+		'cat {input.vcf} | gunzip > {output.vcf}'
