@@ -10,7 +10,7 @@ fam2pop = {
 }
 samples = {
 	'SH032': ['HG00512', 'HG00513', 'HG00514'],
-	'Y117': ['NA19239', 'NA19238', 'NA19240'],
+	'Y117': ['NA19238', 'NA19239', 'NA19240'],
 	'PR05': ['HG00731', 'HG00732', 'HG00733']
 }
 sample2fam = {}
@@ -18,8 +18,8 @@ for fam, sample_list in samples.items():
 	for sample in sample_list:
 		sample2fam[sample] = fam
 ref = 'ref/GRCh38_full_analysis_set_plus_decoy_hla.fa'
-#chromosomes = ['chr'+str(x) for x in range(1,23)] #+ ['chrX']
-chromosomes = ['chr22']
+chromosomes = ['chr'+str(x) for x in range(1,23)] #+ ['chrX']
+#chromosomes = ['chr22']
 
 genotype_sources = ['illumina', 'consensus']
 phaseinputs = ['moleculo','10X','strandseq','10X_strandseq','pacbioblasr', 'pacbioblasr_hic', 'hic','pacbioblasr_10X','pacbioblasr_strandseq','10X_hic','pacbioblasr_10X_strandseq']
@@ -28,8 +28,8 @@ selected_phasings = ['consensus/strandseq/single', 'consensus/10X_hic/single', '
 
 rule master:
 	input:
-		expand('pacbio-gts/{sites}/{family}.{chromosome}.vcf.gz', sites=['chaisson','consensus','pileup'], family=['Y117','SH032'], chromosome=chromosomes),
-		expand('candidate-snps/sample-wise/minabs{minabs}-minrel{minrel}/{sample}.{chromosome}.vcf.gz.tbi', minabs=[2,3,4], minrel=[0.15,0.2], sample=samples['Y117'], chromosome=chromosomes)
+		expand('pacbio-gts/{sites}/{family}.{chromosome}.vcf.gz', sites=['chaisson','consensus','pileup'], family=['Y117'], chromosome=chromosomes),
+		#expand('candidate-snps/sample-wise/minabs{minabs}-minrel{minrel}/{sample}.{chromosome}.vcf.gz.tbi', minabs=[2,3,4], minrel=[0.15,0.2], sample=samples['Y117'], chromosome=chromosomes)
 		#expand('candidate-snps/sample-wise/minabs{minabs}-minrel{minrel}/{sample}.{chromosome}.vcf', minabs=[2,3,4,5,6,7,8], minrel=[0.2,0.3], sample=samples['Y117'], chromosome=chromosomes)
 
 def translate_ebi_filename(f):
@@ -99,15 +99,45 @@ rule family_merge:
 		vcf=lambda wildcards: ['candidate-snps/sample-wise/minabs{minabs}-minrel{minrel}/{sample}.{chromosome}.vcf.gz'.format(sample=s, chromosome=wildcards.chromosome, minabs=wildcards.minabs, minrel=wildcards.minrel) for s in samples[wildcards.family]],
 		tbi=lambda wildcards: ['candidate-snps/sample-wise/minabs{minabs}-minrel{minrel}/{sample}.{chromosome}.vcf.gz.tbi'.format(sample=s, chromosome=wildcards.chromosome, minabs=wildcards.minabs, minrel=wildcards.minrel) for s in samples[wildcards.family]],
 	output:
-		vcf='candidate-snps/family-wise/minabs{minabs}-minrel{minrel}/{family}.{chromosome}.vcf.gz'
+		vcf='candidate-snps/family-wise/minabs{minabs[0-9]+}-minrel{minrel,[0-9\\.]+}/{family,[A-Z0-9]+}.{chromosome,[a-zA-Z0-9]+}.vcf.gz'
 	log: 'candidate-snps/family-wise/minabs{minabs}-minrel{minrel}/{family}.{chromosome}.log'
 	shell:
 		'(bcftools merge {input.vcf} | bcftools filter -e \'(N_ALT>1) || (REF=="N") || (ALT=="N")\' - | bgzip > {output.vcf}) 2> {log}'
 
 rule copy_pileup_snps:
 	input:
-		vcf='candidate-snps/family-wise/minabs2-minrel0.15/{family}.{chromosome}.vcf.gz'
+		vcf='candidate-snps/family-wise-plusindels/minabs2-minrel0.15/{family}.{chromosome}.vcf.gz'
 	output: 
 		vcf='sites/pileup/{family}.{chromosome}.vcf'
 	shell:
 		'cat {input.vcf} | gunzip > {output.vcf}'
+
+rule strip_indels:
+	input:
+		vcf=lambda wildcards: '../hgsvc/input/embl_indels/{}.bi.indels.vcf.gz'.format(fam2pop[wildcards.family])
+	output:
+		vcf='indels/{family}.{chromosome}.vcf.gz'
+	log: 'indels/{family}.{chromosome}.log'
+	shell:
+		'(bcftools view {input.vcf} {wildcards.chromosome} | awk \'BEGIN {{OFS="\\t"}} ($0 ~ /^#/) {{print}} ($0 !~ /^#/) {{$6=".";$7="PASS";$8=".";$9="GT";$10=".";$11=".";$12=".";print}}\' | bgzip > {output.vcf}) 2> {log}'
+
+rule remove_overlapping:
+	input:
+		snpvcf='candidate-snps/family-wise/minabs{minabs}-minrel{minrel}/{family}.{chromosome}.vcf.gz',
+		indelvcf='indels/{family}.{chromosome}.vcf.gz',
+	output:
+		vcf='candidate-snps/family-wise-plusindels/minabs{minabs,[0-9]+}-minrel{minrel,[0-9\\.]+}/tmp/no-overlapping.{family,[A-Z0-9]+}.{chromosome,[a-zA-Z0-9]+}.vcf.gz'
+	shell:
+		'(bcftools view -h {input.snpvcf} && bedtools subtract -A -a {input.snpvcf} -b {input.indelvcf}) | bgzip > {output.vcf}'
+
+rule add_indels:
+	input:
+		snpvcf='candidate-snps/family-wise-plusindels/minabs{minabs}-minrel{minrel}/tmp/no-overlapping.{family}.{chromosome}.vcf.gz',
+		snptbi='candidate-snps/family-wise-plusindels/minabs{minabs}-minrel{minrel}/tmp/no-overlapping.{family}.{chromosome}.vcf.gz.tbi',
+		indelvcf='indels/{family}.{chromosome}.vcf.gz',
+		indeltbi='indels/{family}.{chromosome}.vcf.gz.tbi'
+	output:
+		vcf='candidate-snps/family-wise-plusindels/minabs{minabs}-minrel{minrel}/{family,[A-Z0-9]+}.{chromosome,[a-zA-Z0-9]+}.vcf.gz'
+	log: 'candidate-snps/family-wise-plusindels/minabs{minabs}-minrel{minrel}/{family}.{chromosome}.log'
+	shell:
+		'(bcftools concat -a {input.snpvcf} {input.indelvcf} | bgzip > {output.vcf}) 2> {log}'
