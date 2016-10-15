@@ -19,21 +19,37 @@ unphase_genotype = {
 	'0|0':'0/0'
 }
 
-def read_variants(filename, sample, only_genotype=None):
+def read_variants(filename, sample, only_genotype=None, snvs=True, indels=False):
 	'''Returns a map (chr, pos, ref, alt) --> genotype'''
 	command = "bcftools query -s {}  -f '%CHROM\\t%POS\\t%REF\\t%ALT\\t[%GT]\\n' {}".format(sample, filename)
 	result = {}
 	skipped_invalid = 0
+	skipped_multiallelic = 0
+	skipped_n = 0
+	skipped_snps = 0
 	skipped_nonsnps = 0
 	for line in subprocess.getoutput(command).split('\n'):
+		if line.startswith('Warning:') or line.startswith('[W::'):
+			continue
 		fields = line.split('\t')
 		#if len(fields) != 5:
 			#print(fields)
 			#continue
 		assert len(fields) == 5, line
-		variant = Variant(fields[0], int(fields[1]), fields[2], fields[3])
+		alts = fields[3].split(',')
+		if len(alts) > 1:
+			skipped_multiallelic += 1
+			continue
+		variant = Variant(fields[0], int(fields[1]), fields[2], alts[0])
 		genotype = fields[4]
-		if (len(variant.ref) != 1) or (len(variant.alt) != 1):
+		if ('N' in variant.ref) or ('N' in variant.alt):
+			skipped_n += 1
+			continue
+		is_snv = (len(variant.ref) == 1) and (len(variant.alt) == 1)
+		if is_snv and not snvs:
+			skipped_snps += 1
+			continue
+		if (not is_snv) and (not indels):
 			skipped_nonsnps += 1
 			continue
 		if genotype not in valid_genotypes:
@@ -46,8 +62,14 @@ def read_variants(filename, sample, only_genotype=None):
 		result[variant] = genotype
 	if skipped_invalid > 0:
 		print('Skipped {} invalid genotypes when reading {}'.format(skipped_invalid, filename))
+	if skipped_multiallelic > 0:
+		print('Skipped {} variants that are multi-allelic {}'.format(skipped_multiallelic, filename))
+	if skipped_n > 0:
+		print('Skipped {} variants because REF or ALT contains an N character when reading {}'.format(skipped_n, filename))
+	if skipped_snps > 0:
+		print('Skipped {} variants that are SNVs when reading {}'.format(skipped_snps, filename))
 	if skipped_nonsnps > 0:
-		print('Skipped {} variants that are not bi-allelic SNPs when reading {}'.format(skipped_nonsnps, filename))
+		print('Skipped {} variants that are not SNVs when reading {}'.format(skipped_nonsnps, filename))
 	return result
 
 def read_annotation_track(filename):
@@ -88,6 +110,10 @@ def main():
 		help='Comma-separated list of data set names')
 	parser.add_argument('--annotation', default=None,
 		help='BED track with annotation.')
+	parser.add_argument('--also-indels', default=False, action='store_true',
+		help='Also work on indels.')
+	parser.add_argument('--only-indels', default=False, action='store_true',
+		help='Only work on indels.')
 	parser.add_argument('sample', metavar='SAMPLE', help='sample to work on')
 	parser.add_argument('vcf', nargs='+', metavar='VCF', help='VCF files to compare')
 	args = parser.parse_args()
@@ -98,12 +124,15 @@ def main():
 		names = args.names.split(',')
 		assert len(names) == len(args.vcf)
 
+	snps = not args.only_indels
+	indels = args.only_indels or args.also_indels
+
 	annotation = None
 	if args.annotation is not None:
 		annotation = read_annotation_track(args.annotation)
 	#print(annotation)
 
-	variant_tables = [read_variants(filename, args.sample, args.only_genotype) for filename in args.vcf]
+	variant_tables = [read_variants(filename, args.sample, args.only_genotype, snps, indels) for filename in args.vcf]
 	variant_sets = [set(vt.keys()) for vt in variant_tables]
 	union = set()
 	for s in variant_sets:
