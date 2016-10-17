@@ -95,6 +95,8 @@ def in_annotated_region(annotation, chromosome, position):
 	except KeyError:
 		return False
 	i = bisect_left(l, position)
+	if i >= len(l):
+		return False
 	if l[i] != position:
 		result = (i % 2) == 1
 	else:
