@@ -77,7 +77,8 @@ def main():
 
 	re_nucleotide = re.compile('[ACGTNacgtn]')
 	re_indel = re.compile('[-\\+]([0-9]+)')
-	re_ignore = re.compile('([\\.\\$\\*]|\\^.)')
+	re_ref = re.compile('[,\\.]')
+	re_ignore = re.compile('([\\$\\*]|\\^.)')
 	for line in sys.stdin:
 		fields = line.split()
 		if len(fields) == 4:
@@ -90,6 +91,7 @@ def main():
 		bases = defaultdict(int)
 		#print('digesting pileup', pileup)
 		n = 0
+		ref = fasta[chromosome][position-1]
 		while i < len(pileup):
 			m = re_nucleotide.match(pileup[i:])
 			if m is not None:
@@ -105,14 +107,21 @@ def main():
 				#print('  found indel:', pileup[i:i+skip])
 				i += skip
 				continue
+			m = re_ref.match(pileup[i:])
+			if m is not None:
+				bases[ref] += 1
+				n += 1
+				#print('  found REF:', pileup[i:i+skip])
+				i += 1
+				continue
 			m = re_ignore.match(pileup[i:])
 			if m is not None:
 				skip = (m.end()-m.start())
 				#print('  found other things to ignore:', pileup[i:i+skip])
 				i += skip
 				continue
-			
-		ref = fasta[chromosome][position-1]
+			assert False
+		#print(bases)
 		ref_count = bases[ref]
 		alts = []
 		for base, count in bases.items():
