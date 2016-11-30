@@ -2,7 +2,7 @@ import re
 from itertools import chain
 from collections import defaultdict, namedtuple
 import os
-families = ['SH032'] # ['SH032', 'PR05', 'Y117']
+families = ['SH032', 'Y117'] # ['SH032', 'PR05', 'Y117']
 fam2pop = {
 	'SH032':'CHS',
 	'Y117': 'YRI',
@@ -18,25 +18,31 @@ for fam, sample_list in samples.items():
 	for sample in sample_list:
 		sample2fam[sample] = fam
 ref = 'ref/GRCh38_full_analysis_set_plus_decoy_hla.fa'
-#chromosomes = ['chr'+str(x) for x in range(1,23)] #+ ['chrX']
-chromosomes = ['chr1']
+chromosomes = ['chr'+str(x) for x in range(1,23)] #+ ['chrX']
+#chromosomes = ['chr1']
 
 pacbio_blasr_files = {
 	(sample, chromosome):path for sample, chromosome, path, size, md5 in (line.split('\t') for line in open('pacbio-blasr-files.tsv')) if path.endswith('.bam')
 }
 
-genotype_sources = ['illumina', 'consensus']
-phaseinputs = ['moleculo','10X','strandseq','10X_strandseq','pacbioblasr', 'pacbioblasr_hic', 'hic','pacbioblasr_10X','pacbioblasr_strandseq','10X_hic','pacbioblasr_10X_strandseq']
+#genotype_sources = ['illumina', 'consensus']
+genotype_sources = ['consensus']
+phaseinputs = ['moleculo','10X','strandseq','10X_strandseq','pacbioblasr', 'pacbioblasr_hic','pacbioblasr_strandseq','10X_hic','pacbioblasr_10X_strandseq']
 phasings = ['raw/10X', 'raw/strandseq'] + ['whatshap/{}-{}-{}'.format(g,p,m) for g in genotype_sources for p in phaseinputs for m in ['single','trio']]
-selected_phasings = ['consensus/strandseq/single', 'consensus/10X_hic/single', 'consensus/pacbioblasr_strandseq/single', 'consensus/10X_strandseq/trio', 'consensus/pacbioblasr_10X_strandseq/trio', 'illumina/10X_strandseq/trio']
+selected_phasings = ['consensus/strandseq/single', 'consensus/10X/single', 'consensus/pacbioblasr/single', 'consensus/10X_hic/single', 'consensus/pacbioblasr_strandseq/single', 'illumina/10X_strandseq/trio']
+
+#genotype_sources = ['consensus']
+#phaseinputs = ['10X','strandseq','10X_strandseq','pacbioblasr', 'pacbioblasr_hic', 'pacbioblasr_10X','pacbioblasr_strandseq','10X_hic','pacbioblasr_10X_strandseq']
+#phasings = ['raw/10X', 'raw/strandseq'] + ['whatshap/{}-{}-{}'.format(g,p,m) for g in genotype_sources for p in phaseinputs for m in ['single','trio']]
+#selected_phasings = ['consensus/strandseq/single', 'consensus/pacbioblasr/single', 'consensus/10X_hic/single', 'consensus/pacbioblasr_strandseq/single', 'consensus/10X_strandseq/trio']
 
 rule master:
 	input:
 		#expand('whatshap/{genotypes}/{phaseinput}/{mode}/{family}.{chromosome}.vcf', genotypes=genotype_sources, phaseinput=phaseinputs, mode=['single','trio'], family=families, chromosome=chromosomes),
 		expand('stats/{source}/{family}.tsv', source=phasings, family=families),
 		expand('comparison/selected.{family}.tsv', family=families),
-		expand('whatshap-gt-test/{genotypes}/pacbioblasr/{regularizer}/{family}.{chromosome}.vcf', genotypes=genotype_sources, regularizer=['0', '0.001', '0.01', '0.1', '1'], family=families, chromosome=chromosomes)
-		#expand('comparison/all-inputs-{genotypes}-{mode}.{family}.tsv', genotypes=genotype_sources, mode=['single','trio'], family=families)
+		#expand('whatshap-gt-test/{genotypes}/pacbioblasr/{regularizer}/{family}.{chromosome}.vcf', genotypes=genotype_sources, regularizer=['0', '0.001', '0.01', '0.1', '1'], family=families, chromosome=chromosomes)
+		expand('comparison/all-inputs-{genotypes}-{mode}.{family}.tsv', genotypes=genotype_sources, mode=['single','trio'], family=families),
 		#expand('pacbio/{sample}.{chromosome}.bam', sample=chain(*(samples[f] for f in families)), chromosome=chromosomes)
 
 		#expand('whatshap/{genotypes}/{phaseinput}/single/{family}.{chromosome}.vcf', genotypes=['illumina', 'consensus'], phaseinput=['moleculo','10X','strandseq','10X_strandseq'], family=families, chromosome=['chr22'])
@@ -201,6 +207,12 @@ rule consensus_sitesonly:
 	shell: 'picard MakeSitesOnlyVcf I={input.vcf} O={output.vcf} CREATE_INDEX=false > {log} 2>&1'
 
 ruleorder: consensus_sitesonly > consensus_freebayes_10X
+ruleorder: download_ebi_ftp > bgzip
+
+rule bgzip:
+	input: '{file}.vcf'
+	output: '{file}.vcf.gz'
+	shell: 'bgzip -c {input} > {output}'
 
 rule tabix:
 	input: '{file}.vcf.gz'
@@ -562,3 +574,14 @@ rule pacbio_reheader:
 	log: 'pacbio/{sample}.{chromosome}.bam.log'
 	shell:
 		'picard ReplaceSamHeader CREATE_INDEX=true CREATE_MD5_FILE=true I={input.bam} O={output.bam} HEADER={input.header} > {log} 2>&1'
+
+rule merge_vcfs:
+	input:
+		vcf=expand('whatshap/{{genotypes}}/{{phaseinput}}/{{trio}}/{{family}}.{chromosome}.vcf.gz', chromosome=chromosomes),
+		tabix=expand('whatshap/{{genotypes}}/{{phaseinput}}/{{trio}}/{{family}}.{chromosome}.vcf.gz.tbi', chromosome=chromosomes),
+	output:
+		'whatshap-merged/{genotypes}/{family}.{phaseinput}.{trio}.vcf.gz'
+	log:
+		'whatshap-merged/{genotypes}/{family}.{phaseinput}.{trio}.log'
+	shell:
+		'bcftools concat {input.vcf} | bgzip > {output}'
