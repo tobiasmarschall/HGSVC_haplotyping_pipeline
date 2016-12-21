@@ -558,7 +558,7 @@ rule haplotag_illumina:
 
 
 rule pacbio_correct_header:
-	input: lambda wildcards: 'ftp/working/20160623_chaisson_pacbio_aligns/{}'.format(pacbio_blasr_files[(wildcards.sample, wildcards.chromosome)])
+	input: lambda wildcards: 'ftp/working/{}'.format(pacbio_blasr_files[(wildcards.sample, wildcards.chromosome)])
 	output: 'pacbio/{sample}.{chromosome}.header'
 	shell:
 		'samtools view -H {input} | sed -r \'/^@RG/ s|SM:[a-z0-9]+|SM:{wildcards.sample}|g\' > {output}'
@@ -567,13 +567,21 @@ rule pacbio_correct_header:
 rule pacbio_reheader:
 	input:
 		header='pacbio/{sample}.{chromosome}.header',
-		bam=lambda wildcards: 'ftp/working/20160623_chaisson_pacbio_aligns/{}'.format(pacbio_blasr_files[(wildcards.sample, wildcards.chromosome)])
+		bam=lambda wildcards: 'ftp/working/{}'.format(pacbio_blasr_files[(wildcards.sample, wildcards.chromosome)])
 	output:
 		bam='pacbio/{sample}.{chromosome}.bam',
 		bai='pacbio/{sample}.{chromosome}.bai',
 	log: 'pacbio/{sample}.{chromosome}.bam.log'
 	shell:
 		'picard ReplaceSamHeader CREATE_INDEX=true CREATE_MD5_FILE=true I={input.bam} O={output.bam} HEADER={input.header} > {log} 2>&1'
+
+rule pacbio_all:
+	input:
+		bam=expand('pacbio/{{sample}}.{chromosome}.bam', chromosome=chromosomes)
+	output:
+		done='pacbio/{sample}.done'
+	shell:
+		'touch {output.done}'
 
 rule merge_vcfs:
 	input:
