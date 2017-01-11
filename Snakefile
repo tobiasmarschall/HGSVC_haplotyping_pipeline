@@ -2,7 +2,7 @@ import re
 from itertools import chain
 from collections import defaultdict, namedtuple
 import os
-families = ['SH032', 'Y117'] # ['SH032', 'PR05', 'Y117']
+families = ['SH032', 'PR05', 'Y117']
 fam2pop = {
 	'SH032':'CHS',
 	'Y117': 'YRI',
@@ -12,6 +12,11 @@ samples = {
 	'SH032': ['HG00512', 'HG00513', 'HG00514'],
 	'Y117': ['NA19239', 'NA19238', 'NA19240'],
 	'PR05': ['HG00731', 'HG00732', 'HG00733']
+}
+fam2child = {
+	'SH032': 'HG00514',
+	'Y117': 'NA19240',
+	'PR05': 'HG00733'
 }
 sample2fam = {}
 for fam, sample_list in samples.items():
@@ -38,11 +43,14 @@ selected_phasings = ['consensus/strandseq/single', 'consensus/10X/single', 'cons
 
 rule master:
 	input:
+		expand('sv-phasing/pacbio-typed/pacbio-sv-L500/{family}.{chromosome}.vcf', family=families, chromosome=chromosomes),
+		#expand('sv-phasing/sites-sv/pacbio-sv-L500/{family}.withgt.vcf.gz', family=families, chromosome=chromosomes),
+		#expand('stats/{source}/{family}.tsv', source=phasings, family=families),
+		#expand('comparison/selected.{family}.tsv', family=families),
+		#expand('comparison/all-inputs-{genotypes}-{mode}.{family}.tsv', genotypes=genotype_sources, mode=['single','trio'], family=families),
+
 		#expand('whatshap/{genotypes}/{phaseinput}/{mode}/{family}.{chromosome}.vcf', genotypes=genotype_sources, phaseinput=phaseinputs, mode=['single','trio'], family=families, chromosome=chromosomes),
-		expand('stats/{source}/{family}.tsv', source=phasings, family=families),
-		expand('comparison/selected.{family}.tsv', family=families),
 		#expand('whatshap-gt-test/{genotypes}/pacbioblasr/{regularizer}/{family}.{chromosome}.vcf', genotypes=genotype_sources, regularizer=['0', '0.001', '0.01', '0.1', '1'], family=families, chromosome=chromosomes)
-		expand('comparison/all-inputs-{genotypes}-{mode}.{family}.tsv', genotypes=genotype_sources, mode=['single','trio'], family=families),
 		#expand('pacbio/{sample}.{chromosome}.bam', sample=chain(*(samples[f] for f in families)), chromosome=chromosomes)
 
 		#expand('whatshap/{genotypes}/{phaseinput}/single/{family}.{chromosome}.vcf', genotypes=['illumina', 'consensus'], phaseinput=['moleculo','10X','strandseq','10X_strandseq'], family=families, chromosome=['chr22'])
@@ -83,6 +91,14 @@ rule download_ebi_ftp:
 		shell('wget --output-file={log} -O {output} {f}')
 	#shell: 'touch {output}'
 
+rule download_eichlerlab:
+	output: 'ftp-eichler/{file}'
+	log: 'ftp-eichler/{file}.wgetlog'
+	resources: download=1
+	shell: 'wget --output-file={log} -O {output} https://eichlerlab.gs.washington.edu/public/hgsvg/{wildcards.file}'
+
+ruleorder: download_eichlerlab > tabix
+ruleorder: download_ebi_ftp > tabix
 
 rule download_moleculo:
 	output: 'moleculo/download/{sample}.bam'
@@ -593,3 +609,61 @@ rule merge_vcfs:
 		'whatshap-merged/{genotypes}/{family}.{phaseinput}.{trio}.log'
 	shell:
 		'bcftools concat {input.vcf} | bgzip > {output}'
+
+
+# ---------------------------------------------------------------------------------------------------------------
+# ---- Integrating SVs into haplotypes
+
+rule prepare_sv_vcf:
+	input:
+		#vcf=lambda wildcards: 'ftp/working/20170109_UW_MSSM_Merged_PacBio/20170109_{}.sv_calls.vcf.gz'.format(fam2child[wildcards.family]),
+		vcf=lambda wildcards: 'ftp-eichler/{}.sv_calls.annotated.vcf'.format(fam2child[wildcards.family]),
+		ref=ref,
+	output:
+		vcf='sv-phasing/sites-sv/pacbio-sv-L{length}/{family}.vcf.gz'
+	log: 'sv-phasing/sites-sv/pacbio-sv-L{length}/{family}.log'
+	run:
+		sample0, sample1, sample2 = samples[wildcards.family]
+		shell(
+			'(~/scm/hgsvc/make-alt-explicit.py --min-distance 1000 --max-length {wildcards.length} {input.ref} {input.vcf} | '
+			'awk \'BEGIN {{OFS="\\t"}} ($0 ~ /^##/) {{print}} ($0 ~ /^#CHROM/) {{$10="{sample0}"; $11="{sample1}"; $12="{sample2}"; print}} ($0 !~ /^#/) {{$10="."; $11="."; $12="."; print}}\' | '
+			'bgzip > {output.vcf}) 2> {log}'
+		)
+
+rule prepare_sv_vcf_withgt:
+	input:
+		#vcf=lambda wildcards: 'ftp/working/20170109_UW_MSSM_Merged_PacBio/20170109_{}.sv_calls.vcf.gz'.format(fam2child[wildcards.family]),
+		vcf=lambda wildcards: 'ftp-eichler/{}.sv_calls.annotated.vcf'.format(fam2child[wildcards.family]),
+		ref=ref,
+	output:
+		vcf='sv-phasing/sites-sv/pacbio-sv-L{length}/{family}.withgt.vcf.gz'
+	log: 'sv-phasing/sites-sv/pacbio-sv-L{length}/{family}.withgt.log'
+	shell:
+			'(~/scm/hgsvc/make-alt-explicit.py --min-distance 1000 --max-length {wildcards.length} {input.ref} {input.vcf} | '
+			'bgzip > {output.vcf}) 2> {log}'
+
+ruleorder: prepare_sv_vcf > bgzip
+
+rule join_snv_and_sv:
+	input:
+		consensus='consensus/freebayes_10X/{family}.{chromosome}.vcf.gz',
+		sv='sv-phasing/sites-sv/{what}/{family}.vcf.gz',
+	output:
+		vcf='sv-phasing/sites-snv-sv/{what}/{family}.{chromosome}.vcf.gz'
+	log: 'sv-phasing/sites-snv-sv/{what}/{family}.{chromosome}.vcf.log'
+	shell:
+		'((zcat {input.consensus} && (zcat {input.sv} |awk \'$1=="{wildcards.chromosome}"\' | grep -v \'^#\') ) | vcf-sort | bgzip > {output.vcf}) 2> {log}'
+		#'bcftools concat -a -r {wildcards.chromosome} {input.consensus} {input.sv} | bgzip > {output.vcf}'
+
+ruleorder: join_snv_and_sv > bgzip
+
+rule whatshap_type_svs:
+	input: 
+		vcf='sv-phasing/sites-snv-sv/{what}/{family}.{chromosome}.vcf.gz',
+		bams=lambda wildcards: ['pacbio/{sample}.{chromosome}.bam'.format(sample=s, chromosome=wildcards.chromosome) for s in samples[wildcards.family]],
+		ref=ref
+	output:
+		vcf='sv-phasing/pacbio-typed/{what}/{family}.{chromosome}.vcf'
+	log: 'sv-phasing/pacbio-typed/{what}/{family}.{chromosome}.vcf.log'
+	shell: '~/scm/whatshap.to-run/bin/whatshap phase --indels --full-genotyping --reference {input.ref} -o {output.vcf} {input.vcf} {input.bams} > {log} 2>&1'
+
