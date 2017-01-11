@@ -19,6 +19,7 @@ unphase_genotype = {
 	'0|0':'0/0'
 }
 
+
 def read_variants(filename, sample, only_genotype=None, snvs=True, indels=False):
 	'''Returns a map (chr, pos, ref, alt) --> genotype'''
 	command = "bcftools query -s {}  -f '%CHROM\\t%POS\\t%REF\\t%ALT\\t[%GT]\\n' {}".format(sample, filename)
@@ -28,14 +29,16 @@ def read_variants(filename, sample, only_genotype=None, snvs=True, indels=False)
 	skipped_n = 0
 	skipped_snps = 0
 	skipped_nonsnps = 0
-	for line in subprocess.getoutput(command).split('\n'):
+	bcftools = subprocess.run(command, shell=True, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
+	for line in (s.decode('ascii') for s in bcftools.stdout.splitlines()):
+	#for line in subprocess.getoutput(command).split('\n'):
 		if line.startswith('Warning:') or line.startswith('[W::'):
 			continue
 		fields = line.split('\t')
 		#if len(fields) != 5:
 			#print(fields)
 			#continue
-		assert len(fields) == 5, line
+		assert len(fields) == 5, 'line="{}", fields={}'.format(line, fields)
 		alts = fields[3].split(',')
 		if len(alts) > 1:
 			skipped_multiallelic += 1
