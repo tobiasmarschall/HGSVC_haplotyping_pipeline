@@ -32,6 +32,7 @@ pacbio_blasr_files = {
 
 #genotype_sources = ['illumina', 'consensus']
 genotype_sources = ['consensus']
+single_phaseinputs = ['moleculo','10X','strandseq','pacbioblasr']
 phaseinputs = ['moleculo','10X','strandseq','10X_strandseq','pacbioblasr', 'pacbioblasr_hic','pacbioblasr_strandseq','10X_hic','pacbioblasr_10X_strandseq']
 phasings = ['raw/10X', 'raw/strandseq'] + ['whatshap/{}-{}-{}'.format(g,p,m) for g in genotype_sources for p in phaseinputs for m in ['single','trio']]
 selected_phasings = ['consensus/strandseq/single', 'consensus/10X/single', 'consensus/pacbioblasr/single', 'consensus/10X_hic/single', 'consensus/pacbioblasr_strandseq/single', 'illumina/10X_strandseq/trio']
@@ -43,10 +44,11 @@ selected_phasings = ['consensus/strandseq/single', 'consensus/10X/single', 'cons
 
 rule master:
 	input:
-		expand('sv-phasing/pacbio-typed/pacbio-sv-L500/{family}.{chromosome}.vcf', family=families, chromosome=chromosomes),
+		expand('sv-phasing/pacbio-typed/{sites}/{family}.{chromosome}.vcf', sites=['pacbio-sv-L500','merged-indels','embl-indels'], family=families, chromosome=chromosomes),
 		#expand('sv-phasing/sites-sv/pacbio-sv-L500/{family}.withgt.vcf.gz', family=families, chromosome=chromosomes),
-		#expand('stats/{source}/{family}.tsv', source=phasings, family=families),
-		#expand('comparison/selected.{family}.tsv', family=families),
+		expand('stats/{source}/{family}.tsv', source=phasings, family=families),
+		expand('comparison/selected.{family}.tsv', family=families),
+		expand('whatshap-merged/consensus/{family}.{source}.single.vcf.gz', source=single_phaseinputs, family=families),
 		#expand('comparison/all-inputs-{genotypes}-{mode}.{family}.tsv', genotypes=genotype_sources, mode=['single','trio'], family=families),
 
 		#expand('whatshap/{genotypes}/{phaseinput}/{mode}/{family}.{chromosome}.vcf', genotypes=genotype_sources, phaseinput=phaseinputs, mode=['single','trio'], family=families, chromosome=chromosomes),
@@ -309,7 +311,7 @@ rule whatshap_trio:
 		vcf='whatshap/{genotypes}/{phaseinput}/trio/{family}.{chromosome}.vcf',
 		corrected_gts='whatshap/{genotypes}/{phaseinput}/trio/{family}.{chromosome}.genotype-changes.tsv',
 		recomb='whatshap/{genotypes}/{phaseinput}/trio/{family}.{chromosome}.recomb',
-		readlist='whatshap/{genotypes}/{phaseinput}/single/{family}.{chromosome}.used-reads.tsv'
+		readlist='whatshap/{genotypes}/{phaseinput}/trio/{family}.{chromosome}.used-reads.tsv'
 	log: 'whatshap/{genotypes}/{phaseinput}/trio/{family}.{chromosome}.vcf.log'
 	shell: '~/scm/whatshap.to-run/bin/whatshap phase --ped {input.ped} --indels --distrust-genotypes --output-read-list {output.readlist} --changed-genotype-list {output.corrected_gts} --reference {input.ref} --recombination-list {output.recomb} -o {output.vcf} {input.vcf} {input.phaseinput} > {log} 2>&1'
 
@@ -408,11 +410,12 @@ rule compare_selected_phasing:
 	input: 
 		vcfs= lambda wildcards: ['whatshap/{}/{}.{}.vcf'.format(s,sample2fam[wildcards.sample],wildcards.chromosome) for s in selected_phasings]
 	output: 
-		tsv='comparison/selected/{sample}.{chromosome}.tsv'
+		tsv='comparison/selected/{sample}.{chromosome}.tsv',
+		largestblocktsv='comparison/selected/{sample}.{chromosome}.largestblock.tsv',
 	log: 'comparison/selected/{sample}.{chromosome}.log'
 	run:
 		names = ','.join(selected_phasings)
-		shell('~/scm/whatshap.to-run/bin/whatshap compare --sample {wildcards.sample} --tsv-pairwise {output.tsv} --names {names} {input.vcfs} > {log} 2>&1')
+		shell('~/scm/whatshap.to-run/bin/whatshap compare --longest-block-tsv {output.largestblocktsv} --sample {wildcards.sample} --tsv-pairwise {output.tsv} --names {names} {input.vcfs} > {log} 2>&1')
 
 
 rule merge_tsvs:
@@ -610,9 +613,47 @@ rule merge_vcfs:
 	shell:
 		'bcftools concat {input.vcf} | bgzip > {output}'
 
+rule merge_recomb_lists:
+	input:
+		recomb=expand('whatshap/{{genotypes}}/{{phaseinput}}/trio/{{family}}.{chromosome}.recomb', chromosome=chromosomes),
+	output:
+		'whatshap-merged/{genotypes}/{family}.{phaseinput}.{trio}.recomb.tsv'
+	shell:
+		'cat {input.recomb} | awk \'(NR==1) || ($0 !~ /^#/)\' | tr " " "\\t" > {output}'
+
 
 # ---------------------------------------------------------------------------------------------------------------
 # ---- Integrating SVs into haplotypes
+
+rule prepare_indel_vcf:
+	input:
+		vcf='ftp/working/integration/20170112_merged_indels_gatk_pindel_delly/merged_indels.gatk_pindel_delly.vcf.gz'
+	output:
+		vcf='sv-phasing/sites-sv/merged-indels/{family}.vcf.gz'
+	log: 'sv-phasing/sites-sv/merged-indels/{family}.log'
+	run:
+		sample_names = ','.join(samples[wildcards.family])
+		shell(
+			'(bcftools view --exclude-types snps --samples {sample_names} {input.vcf} | '
+			'awk \'BEGIN {{OFS="\\t"}} ($0 ~ /^#/) {{print}} ($0 !~ /^#/) {{$10="."; $11="."; $12="."; print}}\' | '
+			'bgzip > {output.vcf}) 2> {log}'
+		)
+
+
+rule prepare_embl_indel_vcf:
+	input:
+		vcf=lambda wildcards: 'input/embl_indels/{}.bi.indels.vcf.gz'.format(fam2pop[wildcards.family])
+	output:
+		vcf='sv-phasing/sites-sv/embl-indels/{family}.vcf.gz'
+	log: 'sv-phasing/sites-sv/embl-indels/{family}.log'
+	run:
+		sample_names = ','.join(samples[wildcards.family])
+		shell(
+			'(bcftools view --exclude-types snps --samples {sample_names} {input.vcf} | '
+			'awk \'BEGIN {{OFS="\\t"}} ($0 ~ /^#/) {{print}} ($0 !~ /^#/) {{$9="GT"; $10="."; $11="."; $12="."; print}}\' | '
+			'bgzip > {output.vcf}) 2> {log}'
+		)
+
 
 rule prepare_sv_vcf:
 	input:
