@@ -35,7 +35,7 @@ genotype_sources = ['consensus']
 single_phaseinputs = ['moleculo','10X','strandseq','pacbioblasr']
 phaseinputs = ['moleculo','10X','strandseq','10X_strandseq','pacbioblasr', 'pacbioblasr_hic','pacbioblasr_strandseq','10X_hic','pacbioblasr_10X_strandseq']
 phasings = ['raw/10X', 'raw/strandseq'] + ['whatshap/{}-{}-{}'.format(g,p,m) for g in genotype_sources for p in phaseinputs for m in ['single','trio']]
-selected_phasings = ['consensus/strandseq/single', 'consensus/10X/single', 'consensus/pacbioblasr/single', 'consensus/10X_hic/single', 'consensus/pacbioblasr_strandseq/single', 'illumina/10X_strandseq/trio']
+selected_phasings = ['whatshap/consensus/strandseq/single', 'whatshap/consensus/10X/single', 'whatshap/consensus/pacbioblasr/single', 'whatshap/consensus/10X_hic/single', 'whatshap/consensus/pacbioblasr_strandseq/single', 'whatshap/consensus/10X_strandseq/trio', 'other-phasings/eagle2']
 
 #genotype_sources = ['consensus']
 #phaseinputs = ['10X','strandseq','10X_strandseq','pacbioblasr', 'pacbioblasr_hic', 'pacbioblasr_10X','pacbioblasr_strandseq','10X_hic','pacbioblasr_10X_strandseq']
@@ -44,7 +44,7 @@ selected_phasings = ['consensus/strandseq/single', 'consensus/10X/single', 'cons
 
 rule master:
 	input:
-		expand('sv-phasing/pacbio-typed/{sites}/{family}.{chromosome}.vcf', sites=['pacbio-sv-L500','merged-indels','embl-indels'], family=families, chromosome=chromosomes),
+		#expand('sv-phasing/pacbio-typed/{sites}/{family}.{chromosome}.vcf', sites=['pacbio-sv-L500','merged-indels','embl-indels'], family=families, chromosome=chromosomes),
 		#expand('sv-phasing/sites-sv/pacbio-sv-L500/{family}.withgt.vcf.gz', family=families, chromosome=chromosomes),
 		expand('stats/{source}/{family}.tsv', source=phasings, family=families),
 		expand('comparison/selected.{family}.tsv', family=families),
@@ -85,7 +85,7 @@ def translate_ebi_filename(f):
 	return f
 
 rule download_ebi_ftp:
-	output: temp('ftp/{file}')
+	output: 'ftp/{file}'
 	log: 'ftp/{file}.wgetlog'
 	resources: download=1
 	run: 
@@ -395,27 +395,37 @@ rule whatshap_genotypes:
 		#'~/scm/whatshap.to-run/bin/whatshap phase --tag PS --reference {input.ref} -o {output.vcf} {input.vcf_consensus} {input.bams} > {log} 2>&1'
 
 # =========== COMPARISON ===========
+rule get_eagle2_phasing:
+	input:
+		bcf=lambda wildcards: 'input/1kg-panel-phasing/{}.{}.hg38.phased.bcf'.format(fam2pop[wildcards.family], wildcards.chromosome)
+	output:
+		vcf='other-phasings/eagle2/{family}.{chromosome}.vcf'
+	shell:
+		'bcftools view {input.bcf} > {output.vcf}'
+
 rule compare_phasing:
 	input: 
 		vcfs= lambda wildcards: ['whatshap/{}/{}/{}/{}.{}.vcf'.format(wildcards.genotypes,p,wildcards.mode,sample2fam[wildcards.sample],wildcards.chromosome) for p in phaseinputs]
 	output: 
-		tsv='comparison/all-inputs-{genotypes}-{mode}/{sample}.{chromosome}.tsv'
+		tsv='comparison/all-inputs-{genotypes}-{mode}/{sample}.{chromosome}.tsv',
+		multiwaytsv='comparison/all-inputs-{genotypes}-{mode}/{sample}.{chromosome}.multiway.tsv'
 	log: 'comparison/all-inputs-{genotypes}-{mode}/{sample}.{chromosome}.log'
 	run:
 		names = ','.join(phaseinputs)
-		shell('~/scm/whatshap.to-run/bin/whatshap compare --sample {wildcards.sample} --tsv-pairwise {output.tsv} --names {names} {input.vcfs} > {log} 2>&1')
+		shell('~/scm/whatshap.to-run/bin/whatshap compare --sample {wildcards.sample} --tsv-pairwise {output.tsv} --tsv-multiway {output.multiwaytsv} --names {names} {input.vcfs} > {log} 2>&1')
 
 
 rule compare_selected_phasing:
 	input: 
-		vcfs= lambda wildcards: ['whatshap/{}/{}.{}.vcf'.format(s,sample2fam[wildcards.sample],wildcards.chromosome) for s in selected_phasings]
+		vcfs= lambda wildcards: ['{}/{}.{}.vcf'.format(s,sample2fam[wildcards.sample],wildcards.chromosome) for s in selected_phasings]
 	output: 
 		tsv='comparison/selected/{sample}.{chromosome}.tsv',
 		largestblocktsv='comparison/selected/{sample}.{chromosome}.largestblock.tsv',
+		multiwaytsv='comparison/selected/{sample}.{chromosome}.multiway.tsv',
 	log: 'comparison/selected/{sample}.{chromosome}.log'
 	run:
 		names = ','.join(selected_phasings)
-		shell('~/scm/whatshap.to-run/bin/whatshap compare --longest-block-tsv {output.largestblocktsv} --sample {wildcards.sample} --tsv-pairwise {output.tsv} --names {names} {input.vcfs} > {log} 2>&1')
+		shell('~/scm/whatshap.to-run/bin/whatshap compare --longest-block-tsv {output.largestblocktsv} --sample {wildcards.sample} --tsv-pairwise {output.tsv} --tsv-multiway {output.multiwaytsv} --names {names} {input.vcfs} > {log} 2>&1')
 
 
 rule merge_tsvs:
@@ -624,6 +634,71 @@ rule merge_recomb_lists:
 
 # ---------------------------------------------------------------------------------------------------------------
 # ---- Integrating SVs into haplotypes
+rule prepare_delly_vcf:
+	input:
+		vcf='ftp/working/20160930_pre_ashg_calls/20161002_delly_illumina/hgsvc.delly.svs.GRCh38.20160931.high_coverage.vcf.gz'
+	output:
+		vcf='sv-phasing/sites-sv-with-gt/delly/{family}.vcf.gz'
+	log: 'sv-phasing/sites-sv-with-gt/delly/{family}.log'
+	run:
+		sample_names = ','.join(samples[wildcards.family])
+		shell(
+			'(bcftools view --exclude-types snps --samples {sample_names} {input.vcf} | '
+			'bgzip > {output.vcf}) 2> {log}'
+		)
+
+
+rule remove_gt:
+	input:
+		vcf='sv-phasing/sites-sv-with-gt/{what}/{family}.vcf.gz'
+	output:
+		vcf='sv-phasing/sites-sv/{what}/{family}.vcf.gz'
+	log:
+		'sv-phasing/sites-sv/{what}/{family}.log'
+	shell: 
+		'(bcftools view {input.vcf} | '
+		'awk \'BEGIN {{OFS="\\t"}} ($0 ~ /^#/) {{print}} ($0 !~ /^#/) {{$9="GT"; $10="."; $11="."; $12="."; print}}\' | '
+		'bgzip > {output.vcf}) 2> {log}'
+
+rule join_snv_and_sv_withgt:
+	input:
+		consensus='consensus/freebayes_10X/{family}.{chromosome}.vcf.gz',
+		sv='sv-phasing/sites-sv-with-gt/{what}/{family}.vcf.gz',
+	output:
+		vcf='sv-phasing/sites-snv-sv-with-gt/{what}/{family}.{chromosome}.vcf.gz'
+	log: 'sv-phasing/sites-snv-sv-with-gt/{what}/{family}.{chromosome}.vcf.log'
+	shell:
+		'((zcat {input.consensus} && (zcat {input.sv} |awk \'$1=="{wildcards.chromosome}"\' | grep -v \'^#\') ) | vcf-sort | bgzip > {output.vcf}) 2> {log}'
+		#'bcftools concat -a -r {wildcards.chromosome} {input.consensus} {input.sv} | bgzip > {output.vcf}'
+
+ruleorder: join_snv_and_sv_withgt > bgzip
+
+rule genetic_phase_svs:
+	input:
+		vcf='sv-phasing/sites-snv-sv-with-gt/{what}/{family}.{chromosome}.vcf.gz',
+		consensus= 'whatshap/consensus/10X_strandseq/trio/{family}.{chromosome}.vcf',
+		ped='ped/{family}.ped'
+	output:
+		vcf='sv-phasing/genetic-phasing/{what}/{family}.{chromosome}.vcf',
+	log:
+		'sv-phasing/genetic_phaseing/{what}/{family}.{chromosome}.log'
+	shell:
+		'~/scm/whatshap.to-run/bin/whatshap phase --indels --ped {input.ped} -o {output.vcf} {input.vcf} {input.consensus} > {log} 2>&1'
+
+
+rule merge_vcfs_genetic_phase:
+	input:
+		vcf=expand('sv-phasing/genetic-phasing/{{what}}/{{family}}.{chromosome}.vcf.gz', chromosome=chromosomes),
+		tabix=expand('sv-phasing/genetic-phasing/{{what}}/{{family}}.{chromosome}.vcf.gz.tbi', chromosome=chromosomes),
+	output:
+		'sv-phasing/genetic-phasing-merged/{what}/{family}.vcf.gz'
+	log:
+		'sv-phasing/genetic-phasing-merged/{what}/{family}.log'
+	shell:
+		'bcftools concat {input.vcf} | bgzip > {output}'
+
+# ---------------------------------------------------------------------------------------------------------------
+# ---- PacBio retyping
 
 rule prepare_indel_vcf:
 	input:
@@ -639,6 +714,7 @@ rule prepare_indel_vcf:
 			'bgzip > {output.vcf}) 2> {log}'
 		)
 
+ruleorder: prepare_indel_vcf > remove_gt
 
 rule prepare_embl_indel_vcf:
 	input:
@@ -654,6 +730,7 @@ rule prepare_embl_indel_vcf:
 			'bgzip > {output.vcf}) 2> {log}'
 		)
 
+ruleorder: prepare_embl_indel_vcf > remove_gt
 
 rule prepare_sv_vcf:
 	input:
@@ -671,6 +748,8 @@ rule prepare_sv_vcf:
 			'bgzip > {output.vcf}) 2> {log}'
 		)
 
+ruleorder: prepare_sv_vcf > remove_gt
+
 rule prepare_sv_vcf_withgt:
 	input:
 		#vcf=lambda wildcards: 'ftp/working/20170109_UW_MSSM_Merged_PacBio/20170109_{}.sv_calls.vcf.gz'.format(fam2child[wildcards.family]),
@@ -683,6 +762,7 @@ rule prepare_sv_vcf_withgt:
 			'(~/scm/hgsvc/make-alt-explicit.py --min-distance 1000 --max-length {wildcards.length} {input.ref} {input.vcf} | '
 			'bgzip > {output.vcf}) 2> {log}'
 
+ruleorder: prepare_sv_vcf_withgt > remove_gt
 ruleorder: prepare_sv_vcf > bgzip
 
 rule join_snv_and_sv:
