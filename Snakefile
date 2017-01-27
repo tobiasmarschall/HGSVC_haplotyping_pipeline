@@ -44,11 +44,13 @@ selected_phasings = ['whatshap/consensus/strandseq/single', 'whatshap/consensus/
 
 rule master:
 	input:
+		expand('sv-phasing/pacbio-typed-merged/{family}.{sites}.vcf.gz', family=families, sites=['pacbio-sv-L500','merged-indels','embl-indels']),
 		#expand('sv-phasing/pacbio-typed/{sites}/{family}.{chromosome}.vcf', sites=['pacbio-sv-L500','merged-indels','embl-indels'], family=families, chromosome=chromosomes),
 		#expand('sv-phasing/sites-sv/pacbio-sv-L500/{family}.withgt.vcf.gz', family=families, chromosome=chromosomes),
 		expand('stats/{source}/{family}.tsv', source=phasings, family=families),
 		expand('comparison/selected.{family}.tsv', family=families),
 		expand('whatshap-merged/consensus/{family}.{source}.single.vcf.gz', source=single_phaseinputs, family=families),
+		expand('consensus-merged/freebayes_10X/{family}.ad.vcf.gz.tbi', family=families),
 		#expand('comparison/all-inputs-{genotypes}-{mode}.{family}.tsv', genotypes=genotype_sources, mode=['single','trio'], family=families),
 
 		#expand('whatshap/{genotypes}/{phaseinput}/{mode}/{family}.{chromosome}.vcf', genotypes=genotype_sources, phaseinput=phaseinputs, mode=['single','trio'], family=families, chromosome=chromosomes),
@@ -71,7 +73,6 @@ rule master:
 		#expand('compare/multi3/{family}.tsv', chromosome=chromosomes, family=families),
 		#expand('release/{family}.wgs.whatshap.strandseq-10X.20160622.phased-genotypes.vcf.gz', family=families),
 		##expand('compare/pedmec10X-strandseq/{sample}/{chromosome}.tsv', chromosome=chromosomes, sample=samples['SH032']),
-		#expand('consensus/freebayes_10X/{family}.{chromosome}.vcf', chromosome=chromosomes, family=['Y117']),
 		#expand('ftp/working/20160623_chaisson_pacbio_aligns/20160525.{sample}.PacBio.BLASR/{sample}.PUR.{chromosome}.BLASR.20160525.PacBio.10x-phased.bam.bai',sample=['HG00731', 'HG00732', 'HG00733'], chromosome=chromosomes),
 		#expand('ftp/working/20160623_chaisson_pacbio_aligns/20160525.{sample}.PacBio.BLASR/{sample}.PUR.{chromosome}.BLASR.20160525.PacBio.10x-phased.bam',sample=['HG00731', 'HG00732', 'HG00733'], chromosome=chromosomes),
 		#expand('whatshap/pacbio-noped/PR05.{chromosome}.vcf', chromosome=chromosomes),
@@ -216,6 +217,17 @@ rule consensus_freebayes_10X:
 	shell:
 		'PYTHONPATH=~/scm/whatshap ~/scm/hgsvc/consensus-genotypes-10X-freebayes.py {input.vcf_freebayes} {input.vcfs_10X} > {output.vcf} 2> {log}'
 
+
+rule consensus_with_ad:
+	input:
+		vcfs_10X=lambda wildcards: ['10X/{sample}/filtered/{chromosome}.vcf.gz'.format(sample=s, chromosome=wildcards.chromosome) for s in samples[wildcards.family]],
+		vcf_freebayes='freebayes/illumina/filtered/{family}.{chromosome}.vcf'
+	output:
+		vcf='consensus/freebayes_10X/{family}.{chromosome}.ad.vcf'
+	log: 'consensus/freebayes_10X/{family}.{chromosome}.ad.log'
+	shell:
+		'PYTHONPATH=~/scm/whatshap ~/scm/hgsvc/consensus-genotypes-10X-freebayes.py --include-ad {input.vcf_freebayes} {input.vcfs_10X} > {output.vcf} 2> {log}'
+
 rule consensus_sitesonly:
 	input:
 		vcf='consensus/{what}/{family}.{chromosome}.vcf'
@@ -224,7 +236,20 @@ rule consensus_sitesonly:
 	log: 'consensus/{what}/{family}.{chromosome}.sitesonly.vcf.log'
 	shell: 'picard MakeSitesOnlyVcf I={input.vcf} O={output.vcf} CREATE_INDEX=false > {log} 2>&1'
 
+rule merge_consensus_vcfs:
+	input:
+		vcf=expand('consensus/freebayes_10X/{{family}}.{chromosome}.ad.vcf.gz', chromosome=chromosomes),
+		tabix=expand('consensus/freebayes_10X/{{family}}.{chromosome}.ad.vcf.gz.tbi', chromosome=chromosomes),
+	output:
+		'consensus-merged/freebayes_10X/{family}.ad.vcf.gz'
+	log:
+		'consensus-merged/freebayes_10X/{family}.ad.log'
+	shell:
+		'bcftools concat {input.vcf} | bgzip > {output}'
+
+
 ruleorder: consensus_sitesonly > consensus_freebayes_10X
+ruleorder: consensus_with_ad > consensus_freebayes_10X
 ruleorder: download_ebi_ftp > bgzip
 
 rule bgzip:
@@ -788,3 +813,14 @@ rule whatshap_type_svs:
 	log: 'sv-phasing/pacbio-typed/{what}/{family}.{chromosome}.vcf.log'
 	shell: '~/scm/whatshap.to-run/bin/whatshap phase --indels --full-genotyping --reference {input.ref} -o {output.vcf} {input.vcf} {input.bams} > {log} 2>&1'
 
+
+rule merge_vcfs_pacbio_typed:
+	input:
+		vcf=expand('sv-phasing/pacbio-typed/{{what}}/{{family}}.{chromosome}.vcf.gz', chromosome=chromosomes),
+		tabix=expand('sv-phasing/pacbio-typed/{{what}}/{{family}}.{chromosome}.vcf.gz.tbi', chromosome=chromosomes),
+	output:
+		vcf='sv-phasing/pacbio-typed-merged/{family}.{what}.vcf.gz',
+	log:
+		'sv-phasing/pacbio-typed-merged/{family}.{what}.vcf.log'
+	shell:
+		'bcftools concat {input.vcf} | bgzip > {output}'
