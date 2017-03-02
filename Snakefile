@@ -23,7 +23,7 @@ for fam, sample_list in samples.items():
 	for sample in sample_list:
 		sample2fam[sample] = fam
 ref = 'ref/GRCh38_full_analysis_set_plus_decoy_hla.fa'
-chromosomes = ['chr'+str(x) for x in range(1,23)] #+ ['chrX']
+chromosomes = ['chr'+str(x) for x in range(1,23)] + ['chrX']
 #chromosomes = ['chr1']
 
 pacbio_blasr_files = {
@@ -33,9 +33,10 @@ pacbio_blasr_files = {
 #genotype_sources = ['illumina', 'consensus']
 genotype_sources = ['consensus']
 single_phaseinputs = ['moleculo','10X','strandseq','pacbioblasr']
-phaseinputs = ['moleculo','10X','strandseq','10X_strandseq','pacbioblasr', 'pacbioblasr_hic','pacbioblasr_strandseq','10X_hic','pacbioblasr_10X_strandseq']
-phasings = ['raw/10X', 'raw/strandseq'] + ['whatshap/{}-{}-{}'.format(g,p,m) for g in genotype_sources for p in phaseinputs for m in ['single','trio']]
-selected_phasings = ['whatshap/consensus/strandseq/single', 'whatshap/consensus/10X/single', 'whatshap/consensus/pacbioblasr/single', 'whatshap/consensus/10X_hic/single', 'whatshap/consensus/pacbioblasr_strandseq/single', 'whatshap/consensus/10X_strandseq/trio', 'other-phasings/eagle2']
+phaseinputs = ['moleculo','10X','strandseq','10X_strandseq','pacbioblasr', 'pacbioblasr_hic','pacbioblasr_strandseq','10X_hic','pacbioblasr_10X_strandseq','pacbioblasr_moleculo','pacbioblasr_10X','10X_moleculo','strandseq_moleculo','strandseq_hic','moleculo_hic']
+#phasings = ['raw/10X', 'raw/strandseq'] + ['whatshap/{}-{}-{}'.format(g,p,m) for g in genotype_sources for p in phaseinputs for m in ['single','trio']]
+phasings = ['raw/10X', 'raw/strandseq'] + ['whatshap/{}-{}-{}'.format(g,p,m) for g in genotype_sources for p in phaseinputs for m in ['single']]
+selected_phasings = ['whatshap/consensus/strandseq/single', 'whatshap/consensus/10X/single', 'whatshap/consensus/pacbioblasr/single', 'whatshap/consensus/10X_hic/single', 'whatshap/consensus/pacbioblasr_strandseq/single', 'whatshap/consensus/10X_strandseq/trio',  'other-phasings/hic-ucsd'] # 'other-phasings/eagle2',
 
 #genotype_sources = ['consensus']
 #phaseinputs = ['10X','strandseq','10X_strandseq','pacbioblasr', 'pacbioblasr_hic', 'pacbioblasr_10X','pacbioblasr_strandseq','10X_hic','pacbioblasr_10X_strandseq']
@@ -44,13 +45,15 @@ selected_phasings = ['whatshap/consensus/strandseq/single', 'whatshap/consensus/
 
 rule master:
 	input:
-		expand('sv-phasing/pacbio-typed-merged/{family}.{sites}.vcf.gz', family=families, sites=['pacbio-sv-L500','merged-indels','embl-indels']),
+		expand('consensus/freebayes_gatk/{family}.{chromosome}.vcf.gz', family=families, chromosome=chromosomes),
+		#expand('sv-phasing/pacbio-typed-merged/{family}.{sites}.vcf.gz', family=families, sites=['pacbio-sv-L500','merged-indels','embl-indels']),
 		#expand('sv-phasing/pacbio-typed/{sites}/{family}.{chromosome}.vcf', sites=['pacbio-sv-L500','merged-indels','embl-indels'], family=families, chromosome=chromosomes),
 		#expand('sv-phasing/sites-sv/pacbio-sv-L500/{family}.withgt.vcf.gz', family=families, chromosome=chromosomes),
-		expand('stats/{source}/{family}.tsv', source=phasings, family=families),
-		expand('comparison/selected.{family}.tsv', family=families),
-		expand('whatshap-merged/consensus/{family}.{source}.single.vcf.gz', source=single_phaseinputs, family=families),
-		expand('consensus-merged/freebayes_10X/{family}.ad.vcf.gz.tbi', family=families),
+		#expand('stats/{source}/{family}.tsv', source=phasings, family=families),
+		#expand('comparison/selected.{family}.tsv', family=families),
+		#expand('whatshap-merged/consensus/{family}.{source}.single.vcf.gz', source=single_phaseinputs, family=families),
+		#expand('consensus-merged/freebayes_10X/{family}.ad.vcf.gz.tbi', family=families),
+		#expand('comparison/all-inputs-{genotypes}-{mode}.{family}.tsv', genotypes=['consensus'], mode=['single'], family=families),
 		#expand('comparison/all-inputs-{genotypes}-{mode}.{family}.tsv', genotypes=genotype_sources, mode=['single','trio'], family=families),
 
 		#expand('whatshap/{genotypes}/{phaseinput}/{mode}/{family}.{chromosome}.vcf', genotypes=genotype_sources, phaseinput=phaseinputs, mode=['single','trio'], family=families, chromosome=chromosomes),
@@ -206,6 +209,13 @@ rule filter_10X_vcf:
 	shell:
 		'zcat {input.vcf} | awk \'($0 ~ /^#/) || (($6 != ".") && ($6 >= 30) && ($7 == "PASS"))\' | gzip > {output.vcf}'
 
+rule filter_gatk_vcf:
+	input:
+		vcf='gatk/raw/{family}.{chromosome}.vcf.gz'
+	output:
+		vcf='gatk/filtered/{family}.{chromosome}.vcf.gz'
+	shell:
+		'zcat {input.vcf} | awk \'($0 ~ /^#/) || (($6 != ".") && ($6 >= 200))\' | bgzip > {output.vcf}'
 
 rule consensus_freebayes_10X:
 	input:
@@ -216,7 +226,6 @@ rule consensus_freebayes_10X:
 	log: 'consensus/freebayes_10X/{family}.{chromosome}.log'
 	shell:
 		'PYTHONPATH=~/scm/whatshap ~/scm/hgsvc/consensus-genotypes-10X-freebayes.py {input.vcf_freebayes} {input.vcfs_10X} > {output.vcf} 2> {log}'
-
 
 rule consensus_with_ad:
 	input:
@@ -235,6 +244,16 @@ rule consensus_sitesonly:
 		vcf='consensus/{what}/{family}.{chromosome}.sitesonly.vcf.gz'
 	log: 'consensus/{what}/{family}.{chromosome}.sitesonly.vcf.log'
 	shell: 'picard MakeSitesOnlyVcf I={input.vcf} O={output.vcf} CREATE_INDEX=false > {log} 2>&1'
+
+rule consensus_freebayes_gatk:
+	input:
+		vcf_gatk='gatk/filtered/{family}.{chromosome}.vcf.gz',
+		vcf_freebayes='freebayes/illumina/filtered/{family}.{chromosome}.vcf'
+	output:
+		vcf='consensus/freebayes_gatk/{family}.{chromosome}.vcf.gz'
+	log: 'consensus/freebayes_gatk/{family}.{chromosome}.log'
+	shell:
+		'(~/scm/hgsvc/consensus-genotypes-freebayes-gatk.py {input.vcf_freebayes} {input.vcf_gatk} | bgzip > {output.vcf}) 2> {log}'
 
 rule merge_consensus_vcfs:
 	input:
@@ -270,6 +289,17 @@ rule extract_chromosome_10X:
 	shell:
 		'zcat {input.vcf} | awk \'($0 ~ /^#/) || ($1=="{wildcards.chromosome}")\' | uniq | gzip > {output.vcf}'
 
+def get_gatk_filename(wildcards):
+	m = {'SH032':'han', 'Y117':'yri', 'PR05':'pur'}
+	return 'ftp/working/20160930_pre_ashg_calls/20170223.Illumina.GATK/20170223.Illumina.GATK.{}.gatk.vcf.gz'.format(m[wildcards.family])
+
+rule extract_chromosome_gatk:
+	input: 
+		vcf=get_gatk_filename
+	output:
+		vcf='gatk/raw/{family}.{chromosome}.vcf.gz'
+	shell:
+		'zcat {input.vcf} | awk \'($0 ~ /^#/) || ($1=="{wildcards.chromosome}")\' | uniq | bgzip > {output.vcf}'
 
 rule project_strandseq:
 	input:
@@ -428,6 +458,14 @@ rule get_eagle2_phasing:
 	shell:
 		'bcftools view {input.bcf} > {output.vcf}'
 
+rule get_hic_phasing:
+	input:
+		vcfs=lambda wildcards: ['input/hic-ucsd/{}.haploseq.seed_haplotype.20170228.genotypes.vcf.gz'.format(sample) for sample in samples[wildcards.family]]
+	output:
+		vcf='other-phasings/hic-ucsd/{family}.{chromosome}.vcf'
+	shell:
+		'bcftools merge {input.vcfs} > {output.vcf}'
+
 rule compare_phasing:
 	input: 
 		vcfs= lambda wildcards: ['whatshap/{}/{}/{}/{}.{}.vcf'.format(wildcards.genotypes,p,wildcards.mode,sample2fam[wildcards.sample],wildcards.chromosome) for p in phaseinputs]
@@ -496,6 +534,15 @@ rule merge_tsvs:
 	#output: 'compare/{what}/{family}.tsv'
 	#shell:
 		#'(head -n1 {input[0]} && grep -hv "^#" {input}) > {output}'
+
+rule snv_concordance_gatk_vs_consensus:
+	input:
+		consensus=lambda wildcards: 'ftp/working/20160704_whatshap_strandseq_10X_phased_SNPs/{}/{}.wgs.whatshap.strandseq-10X.20160704.phased-genotypes.vcf.gz'.format(fam2pop[wildcards.family],wildcards.family), 
+		gatk=get_gatk_filename
+	output:
+		report='snv-concordance/gatk-vs-consensus/{family}.{sample}.txt'
+	shell:
+		'~/scm/hgsvc/compare-vcfs.py --names consensus,gatk {wildcards.sample} {input.consensus} {input.gatk} > {output.report} 2>&1'
 
 # =========== STATISTICS ===========
 rule stats_raw_strandseq:
