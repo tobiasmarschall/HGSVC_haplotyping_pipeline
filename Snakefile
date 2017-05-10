@@ -19,6 +19,7 @@ fam2child = {
 	'Y117': 'NA19240',
 	'PR05': 'HG00733'
 }
+all_children = [fam2child[f] for f in families]
 sample2fam = {}
 for fam, sample_list in samples.items():
 	for sample in sample_list:
@@ -73,6 +74,13 @@ selected_phasings = [
 rule master:
 	input:
 		expand('{what}/{family}.{chromosome}.vcf.gz', what=selected_phasings, family=families, chromosome=chromosomes),
+		expand('comparison/selected.{family}.tsv', family=families),
+		'comparison/selected.all.children.tsv',
+		'stats/selected.all-children.tsv',
+		'counts/het-snvs/consensus/freebayes_gatk/all.tsv',
+		expand('stats/{what}/{sample}.{chromosome}.tsv', sample=all_children, what=selected_phasings, chromosome=chromosomes),
+		expand('blocklists/{what}/{sample}.blocklist.tsv', sample=all_children, what=selected_phasings),
+
 		#expand('consensus/freebayes_gatk/{family}.{chromosome}.vcf.gz', family=families, chromosome=chromosomes),
 		#expand('consensus-merged/freebayes_gatk/{family}.vcf.gz.tbi', family=families),
 		#expand('snv-concordance/consensus-vs-consensus2/{sample}.txt', sample=all_samples),
@@ -82,8 +90,7 @@ rule master:
 		#expand('sv-phasing/pacbio-typed/{sites}/{family}.{chromosome}.vcf', sites=['pacbio-sv-L500','merged-indels','embl-indels'], family=families, chromosome=chromosomes),
 		#expand('sv-phasing/sites-sv/pacbio-sv-L500/{family}.withgt.vcf.gz', family=families, chromosome=chromosomes),
 		#expand('stats/raw/hic-ucsd/{sample}/{chromosome}.tsv', sample=all_samples, chromosome=chromosomes),
-		expand('comparison/selected.{family}.tsv', family=families),
-		'comparison/selected.all.children.tsv'
+		
 		#expand('whatshap-merged/consensus/{family}.{source}.single.vcf.gz', source=single_phaseinputs, family=families),
 		#expand('consensus-merged/freebayes_10X/{family}.ad.vcf.gz.tbi', family=families),
 		#expand('comparison/all-inputs-{genotypes}-{mode}.{family}.tsv', genotypes=['consensus'], mode=['single'], family=families),
@@ -697,39 +704,68 @@ rule snv_concordance_consensus2_vs_pacbio:
 		'~/scm/hgsvc/compare-vcfs.py --names fb_gatk,pacbio {wildcards.sample} {input.consensus2} {input.pacbio} > {output.report} 2>&1'
 
 # =========== STATISTICS ===========
-rule stats_raw_strandseq:
-	input: 'strandseq/projected/{sample}/{chromosome}.vcf'
-	output: 'stats/raw/strandseq/{sample}/{chromosome}.tsv'
-	log: 'stats/raw/strandseq/{sample}/{chromosome}.log'
-	shell:
-		'~/scm/whatshap.to-run/bin/whatshap stats --tsv {output} {input} > {log} 2>&1'
+#rule stats_raw_strandseq:
+	#input: 'strandseq/projected/{sample}/{chromosome}.vcf'
+	#output: 'stats/raw/strandseq/{sample}/{chromosome}.tsv'
+	#log: 'stats/raw/strandseq/{sample}/{chromosome}.log'
+	#shell:
+		#'~/scm/whatshap.to-run/bin/whatshap stats --tsv {output} {input} > {log} 2>&1'
 
-rule stats_raw_hic_ucsd:
-	input: lambda wildcards: 'other-phasings/hic-ucsd/{}.{}.vcf'.format(sample2fam[wildcards.sample], wildcards.chromosome)
-	output: 'stats/raw/hic-ucsd/{sample}/{chromosome}.tsv'
-	log: 'stats/raw/hic-ucsd/{sample}/{chromosome}.log'
-	shell:
-		'~/scm/whatshap.to-run/bin/whatshap stats --sample {wildcards.sample} --tsv {output} {input} > {log} 2>&1'
+#rule stats_raw_hic_ucsd:
+	#input: lambda wildcards: 'other-phasings/hic-ucsd/{}.{}.vcf'.format(sample2fam[wildcards.sample], wildcards.chromosome)
+	#output: 'stats/raw/hic-ucsd/{sample}/{chromosome}.tsv'
+	#log: 'stats/raw/hic-ucsd/{sample}/{chromosome}.log'
+	#shell:
+		#'~/scm/whatshap.to-run/bin/whatshap stats --sample {wildcards.sample} --tsv {output} {input} > {log} 2>&1'
 
-rule stats_10X:
-	input: '10X/{sample}/filtered/{chromosome}.vcf.gz'
-	output: 'stats/raw/10X/{sample}/{chromosome}.tsv'
-	log: 'stats/raw/10X/{sample}/{chromosome}.log'
-	shell:
-		'~/scm/whatshap.to-run/bin/whatshap stats --tsv {output} {input} > {log} 2>&1'
+#rule stats_10X:
+	#input: '10X/{sample}/filtered/{chromosome}.vcf.gz'
+	#output: 'stats/raw/10X/{sample}/{chromosome}.tsv'
+	#log: 'stats/raw/10X/{sample}/{chromosome}.log'
+	#shell:
+		#'~/scm/whatshap.to-run/bin/whatshap stats --tsv {output} {input} > {log} 2>&1'
 
 
-rule stats_whatshap:
-	input: lambda wildcards: 'whatshap/{}/{}/{}/{}.{}.vcf'.format(wildcards.genotypes, wildcards.phaseinput, wildcards.what, sample2fam[wildcards.sample], wildcards.chromosome)
-	output: 'stats/whatshap/{genotypes,[^/]+}-{phaseinput,[^/]+}-{what,[^/]+}/{sample,[^/]+}/{chromosome,[^/]+}.tsv'
-	log: 'stats/whatshap/{genotypes,[^/]+}-{phaseinput,[^/]+}-{what,[^/]+}/{sample,[^/]+}/{chromosome,[^/]+}.log'
+#rule stats_whatshap:
+	#input: lambda wildcards: 'whatshap/{}/{}/{}/{}.{}.vcf'.format(wildcards.genotypes, wildcards.phaseinput, wildcards.what, sample2fam[wildcards.sample], wildcards.chromosome)
+	#output: 'stats/whatshap/{genotypes,[^/]+}-{phaseinput,[^/]+}-{what,[^/]+}/{sample,[^/]+}/{chromosome,[^/]+}.tsv'
+	#log: 'stats/whatshap/{genotypes,[^/]+}-{phaseinput,[^/]+}-{what,[^/]+}/{sample,[^/]+}/{chromosome,[^/]+}.log'
+	#shell:
+		#'~/scm/whatshap.to-run/bin/whatshap stats --tsv {output} --sample {wildcards.sample} {input} > {log} 2>&1'
+
+
+rule stats:
+	input: lambda wildcards: '{}/{}.{}.vcf.gz'.format(wildcards.what, sample2fam[wildcards.sample], wildcards.chromosome)
+	output: 
+		main='stats/{what}/{sample}.{chromosome}.tsv',
+		blocklist='stats/{what}/{sample}.{chromosome}.blocklist.tsv',
+	log: 'stats/{what}/{sample}.{chromosome}.log'
 	shell:
-		'~/scm/whatshap.to-run/bin/whatshap stats --tsv {output} --sample {wildcards.sample} {input} > {log} 2>&1'
+		'~/scm/whatshap.to-run/bin/whatshap stats --chromosome {wildcards.chromosome} --only-snvs --sample {wildcards.sample} --block-list {output.blocklist} --tsv {output.main} {input} > {log} 2>&1'
 
 
 rule merge_stats_tsvs:
-	input: lambda wildcards: ['stats/{}/{}/{}/{}.tsv'.format(wildcards.method, wildcards.source,sample,chromosome) for sample in samples[wildcards.family] for chromosome in chromosomes]
-	output: 'stats/{method,[^/]+}/{source,[^/]+}/{family,[^/]+}.tsv'
+	input: expand('stats/{what}/{sample}.{chromosome}.tsv', what=selected_phasings, sample=all_children, chromosome=chromosomes)
+	output: 'stats/selected.all-children.tsv'
+	shell:
+		'(head -n1 {input[0]} && tail -q -n1 {input}) > {output}'
+
+
+rule merge_block_length_tsvs:
+	input: expand('stats/{{what}}/{{sample}}.{chromosome}.blocklist.tsv', chromosome=chromosomes)
+	output: 'blocklists/{what}/{sample}.blocklist.tsv'
+	shell:
+		'(head -n1 {input[0]} && (cat {input} | grep -v \'^#\') ) > {output}'
+
+
+rule count_het_snvs:
+	input: lambda wildcards: '{}/{}.{}.vcf.gz'.format(wildcards.what, sample2fam[wildcards.sample], wildcards.chromosome)
+	output: 'counts/het-snvs/{what}/{sample}.{chromosome}.tsv'
+	shell: 'echo -e "#sample\\tchromosome\\thet_snv_count\\n{wildcards.sample}\\t{wildcards.chromosome}\\t$(bcftools view --samples {wildcards.sample} {input} | bcftools view -v snps -g het -H|wc -l)" > {output}'
+
+rule merge_count_tsvs:
+	input: lambda wildcards: ['counts/het-snvs/{}/{}.{}.tsv'.format(wildcards.what, sample, chromosome) for sample in all_samples for chromosome in chromosomes]
+	output: 'counts/het-snvs/{what}/all.tsv'
 	shell:
 		'(head -n1 {input[0]} && tail -q -n1 {input}) > {output}'
 
