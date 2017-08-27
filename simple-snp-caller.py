@@ -91,7 +91,7 @@ def main():
 		bases = defaultdict(int)
 		#print('digesting pileup', pileup)
 		n = 0
-		ref = fasta[chromosome][position-1]
+		ref = fasta[chromosome][position-1].upper()
 		while i < len(pileup):
 			m = re_nucleotide.match(pileup[i:])
 			if m is not None:

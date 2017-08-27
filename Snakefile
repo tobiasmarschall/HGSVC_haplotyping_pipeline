@@ -924,6 +924,28 @@ rule prepare_delly_vcf:
 			'bgzip > {output.vcf}) 2> {log}'
 		)
 
+rule prepare_merged_indels_vcf_header:
+	input:
+		vcf='ftp/working/integration/20170515_Integrated_indels_Illumina_PacBio/Illumina_PacBio_Indels_Merged_20170515.vcf.gz'
+	output:
+		header='sv-phasing/sites-sv-with-gt/ill_pb_merge_20170515/{family}.newheader'
+	log: 'sv-phasing/sites-sv-with-gt/ill_pb_merge_20170515/{family}.newheader.log'
+	shell:
+		'(bcftools view -h {input.vcf} | awk \'{{if ($1 ~ /^#CHROM/) print "##INFO=<ID=SAMPLES,Number=.,Type=String,Description=\\"Samples\\">"; print $0}}\' > {output.header}) 2> {log}'
+
+rule prepare_merged_indels_vcf:
+	input:
+		vcf='ftp/working/integration/20170515_Integrated_indels_Illumina_PacBio/Illumina_PacBio_Indels_Merged_20170515.vcf.gz',
+		header='sv-phasing/sites-sv-with-gt/ill_pb_merge_20170515/{family}.newheader'
+	output:
+		vcf='sv-phasing/sites-sv-with-gt/ill_pb_merge_20170515/{family}.vcf.gz'
+	log: 'sv-phasing/sites-sv-with-gt/ill_pb_merge_20170515/{family}.log'
+	run:
+		sample_names = ','.join(samples[wildcards.family])
+		shell(
+			'(bcftools reheader -h {input.header} {input.vcf} | bcftools view --exclude-types snps -m2 -M2 --samples {sample_names} | '
+			'bcftools view -c 1 | bgzip > {output.vcf}) 2> {log}'
+		)
 
 rule remove_gt:
 	input:
